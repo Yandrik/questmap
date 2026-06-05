@@ -1,0 +1,31 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    environment:
+      SURREALDB_URL: ws://surrealdb:8000
+      SURREALDB_NAMESPACE: questmap
+      SURREALDB_DATABASE: questmap
+      SURREALDB_USERNAME: root
+      SURREALDB_PASSWORD: root
+    ports:
+      - "8000:8000"
+    depends_on:
+      - surrealdb
+
+  surrealdb:
+    image: surrealdb/surrealdb:latest-dev
+    command:
+      - start
+      - --user
+      - root
+      - --pass
+      - root
+      - rocksdb:/data/questmap.db
+    ports:
+      - "8001:8000"
+    volumes:
+      - surrealdb-data:/data
+
+volumes:
+  surrealdb-data:

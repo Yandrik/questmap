@@ -10,3 +10,43 @@ dependencies = [
     "pydantic-ai>=1.106.0",
     "surrealdb[pydantic]>=2.0.0",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.16",
+    "ty>=0.0.44",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+    "A",
+    "ASYNC",
+    "B",
+    "C4",
+    "E",
+    "F",
+    "FAST",
+    "I",
+    "N",
+    "PERF",
+    "PIE",
+    "PTH",
+    "RET",
+    "RUF",
+    "SIM",
+    "UP",
+    "W",
+]
+ignore = [
+    "B008",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["backend"]
+
+[tool.ty.environment]
+python-version = "3.13"
