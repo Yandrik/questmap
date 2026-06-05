@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from surreal_orm import SurrealDBConnectionManager
 from surrealdb import AsyncSurreal, SurrealError
 
-from models import GeoPoint, GeoPolygon, Quest
+from models import GeoPoint, GeoPolygon, Quest, QuestCompletion
 
 
 class Settings(BaseSettings):
@@ -153,6 +153,64 @@ class QuestResponse(BaseModel):
     issuer_id: str = Field(..., alias="issuerID")
 
 
+# ---------------------------------------------------------------------------
+# Completion schemas
+# ---------------------------------------------------------------------------
+
+_completion_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+
+class CompletionCreate(BaseModel):
+    model_config = _completion_config
+
+    quest_id: str = Field(..., alias="questID")
+    completion_time: datetime
+    completion_user_id: str = Field(..., alias="completionUserID")
+    proof_urls: list[str] | None = None
+    confirmed: bool
+    location: GeoPoint
+    user_location: GeoPoint | None = None
+
+
+class CompletionConfirm(BaseModel):
+    confirmed: bool
+
+
+class CompletionResponse(BaseModel):
+    model_config = _completion_config
+
+    id: str
+    quest_id: str = Field(..., alias="questID")
+    completion_time: datetime
+    completion_user_id: str = Field(..., alias="completionUserID")
+    proof_urls: list[str] | None = None
+    confirmed: bool
+    location: GeoPoint
+    user_location: GeoPoint | None = None
+
+
+def _completion_to_response(c: QuestCompletion) -> CompletionResponse:
+    return CompletionResponse.model_validate(
+        {
+            "id": c.id,
+            "questID": c.quest_id,
+            "completionTime": c.completion_time,
+            "completionUserID": c.completion_user_id,
+            "proofUrls": c.proof_urls,
+            "confirmed": c.confirmed,
+            "location": c.location,
+            "userLocation": c.user_location,
+        }
+    )
+
+
+async def _get_completion_or_404(completion_id: str) -> QuestCompletion:
+    try:
+        return await QuestCompletion.objects().get(completion_id)
+    except QuestCompletion.DoesNotExist as exc:
+        raise HTTPException(status_code=404, detail="Completion not found") from exc
+
+
 def _quest_to_response(q: Quest) -> QuestResponse:
     return QuestResponse.model_validate(
         {
@@ -226,3 +284,40 @@ async def update_quest(quest_id: str, body: QuestUpdate) -> QuestResponse:
 async def delete_quest(quest_id: str) -> None:
     quest = await _get_quest_or_404(quest_id)
     await quest.delete()
+
+
+# ---------------------------------------------------------------------------
+# Completion endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/completions", status_code=201)
+async def create_completion(body: CompletionCreate) -> CompletionResponse:
+    completion = QuestCompletion(
+        quest_id=body.quest_id,
+        completion_time=body.completion_time,
+        completion_user_id=body.completion_user_id,
+        proof_urls=body.proof_urls,
+        confirmed=body.confirmed,
+        location=body.location,
+        user_location=body.user_location,
+    )
+    await completion.save()
+    return _completion_to_response(completion)
+
+
+@app.get("/quests/{quest_id}/completions")
+async def list_quest_completions(quest_id: str) -> list[CompletionResponse]:
+    completions: list[QuestCompletion] = await QuestCompletion.objects().filter(
+        quest_id=quest_id
+    )
+    return [_completion_to_response(c) for c in completions]
+
+
+@app.put("/completions/{completion_id}/confirm")
+async def confirm_completion(
+    completion_id: str, body: CompletionConfirm
+) -> CompletionResponse:
+    completion = await _get_completion_or_404(completion_id)
+    await completion.merge(confirmed=body.confirmed)
+    await completion.refresh()
+    return _completion_to_response(completion)

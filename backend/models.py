@@ -38,3 +38,16 @@ class Quest(BaseSurrealModel):
         if self.position is None and self.area is None:
             raise ValueError("At least one of 'position' or 'area' must be provided")
         return self
+
+
+class QuestCompletion(BaseSurrealModel):
+    id: str | None = None
+
+    quest_id: str
+    completion_time: datetime
+    completion_user_id: str
+
+    proof_urls: list[str] | None = None
+    confirmed: bool
+    location: GeoPoint
+    user_location: GeoPoint | None = None
