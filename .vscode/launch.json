@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "FastAPI (backend)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/backend/.venv/bin/fastapi",
+            "python": "${workspaceFolder}/backend/.venv/bin/python",
+            "args": [
+                "dev", "main.py",
+                "--host", "0.0.0.0",
+                "--port", "8000"
+            ],
+            "cwd": "${workspaceFolder}/backend",
+            "env": {
+                "SURREALDB_URL": "ws://localhost:8001",
+                "SURREALDB_NAMESPACE": "questmap",
+                "SURREALDB_DATABASE": "questmap",
+                "SURREALDB_USERNAME": "root",
+                "SURREALDB_PASSWORD": "root"
+            },
+            "jinja": true,
+            "justMyCode": true
+        }
+    ]
+}
