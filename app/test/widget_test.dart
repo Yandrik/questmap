@@ -1,9 +1,17 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
+import 'package:watch_it/watch_it.dart';
 
 import 'package:meander/app/meander.dart';
+import 'package:meander/locator.dart';
 
 void main() {
+  setUp(configureDependencies);
+
+  tearDown(() async {
+    await di.reset();
+  });
+
   testWidgets('renders the MapLibre OMT map shell', (
     WidgetTester tester,
   ) async {

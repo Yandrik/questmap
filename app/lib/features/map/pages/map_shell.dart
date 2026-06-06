@@ -1,23 +1,31 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:permission_handler/permission_handler.dart'
+    show openAppSettings;
+import 'package:watch_it/watch_it.dart';
 
+import '../../../_shared/models/geo_coordinate.dart';
+import '../../../_shared/models/transport_mode.dart';
 import '../../../app/app_config.dart';
+import '../../location/manager/location_manager.dart';
+import '../../routing/manager/routing_manager.dart';
+import '../../routing/model/direct_navigation_request.dart';
+import '../manager/map_selection_manager.dart';
 import '../model/rendered_map_feature.dart';
 import '../model/selected_map_target.dart';
 import '../services/map_feature_hit_tester.dart';
 import '../services/map_icon_registry.dart';
+import '../services/map_route_overlay.dart';
 import '../services/map_selection_overlay.dart';
 import '../services/map_style_config.dart';
 import '../widgets/location_button.dart';
 import '../widgets/map_title_badge.dart';
 import '../widgets/target_details_panel.dart';
 
-class MapShell extends StatefulWidget {
+class MapShell extends WatchingStatefulWidget {
   const MapShell({super.key});
 
   @override
@@ -32,22 +40,9 @@ class _MapShellState extends State<MapShell> {
   final _hitTester = const MapFeatureHitTester();
   final _iconRegistry = const MapIconRegistry();
   final _selectionOverlay = MapSelectionOverlay();
+  final _routeOverlay = MapRouteOverlay();
 
   MapLibreMapController? _controller;
-  SelectedMapTarget? _selectedTarget;
-  LatLng? _lastUserLocation;
-  PermissionStatus? _locationPermissionStatus;
-  bool _isQuerying = false;
-  bool _isRequestingLocation = false;
-  bool _isUserLocationEnabled = false;
-  bool _hasCenteredOnUserLocation = false;
-  String? _message;
-
-  bool get _supportsUserLocation {
-    if (kIsWeb) return true;
-    return defaultTargetPlatform == TargetPlatform.android ||
-        defaultTargetPlatform == TargetPlatform.iOS;
-  }
 
   @override
   void initState() {
@@ -67,24 +62,23 @@ class _MapShellState extends State<MapShell> {
 
     await _iconRegistry.registerStyleIcons(controller);
     await _selectionOverlay.addSelectionLayer(controller);
+    await _routeOverlay.addRouteLayers(controller);
 
-    final selectedTarget = _selectedTarget;
+    final selectedTarget = di<MapSelectionManager>().selectedTarget;
     if (selectedTarget != null) {
       await _selectionOverlay.setSelectionCircle(
         selectedTarget.coordinates,
         controller,
       );
     }
+    await _syncRouteOverlay();
   }
 
   Future<void> _onMapClick(math.Point<double> point, LatLng coordinates) async {
     final controller = _controller;
     if (controller == null) return;
 
-    setState(() {
-      _isQuerying = true;
-      _message = null;
-    });
+    final selectionManager = di<MapSelectionManager>()..beginQuery();
 
     final features = await controller.queryRenderedFeaturesInRect(
       ui.Rect.fromLTRB(point.x - 8, point.y - 8, point.x + 8, point.y + 8),
@@ -119,71 +113,16 @@ class _MapShellState extends State<MapShell> {
       selectedTarget.coordinates,
       controller,
     );
+    di<RoutingManager>().clear();
+    await _routeOverlay.clear(controller);
 
     if (!mounted) return;
-
-    setState(() {
-      _isQuerying = false;
-      _selectedTarget = selectedTarget;
-      _message = null;
-    });
+    selectionManager.selectTarget(selectedTarget);
   }
 
   Future<void> _requestUserLocationPermission() async {
-    if (!_supportsUserLocation) {
-      if (!mounted) return;
-      setState(() {
-        _message = 'User location is not supported on this platform.';
-      });
-      return;
-    }
-
-    setState(() {
-      _isRequestingLocation = true;
-      _message = 'Requesting location permission...';
-    });
-
-    try {
-      if (!kIsWeb) {
-        final serviceStatus = await Permission.locationWhenInUse.serviceStatus;
-        if (serviceStatus.isDisabled) {
-          if (!mounted) return;
-          setState(() {
-            _isRequestingLocation = false;
-            _isUserLocationEnabled = false;
-            _message = 'Turn on location services to show your position.';
-          });
-          return;
-        }
-      }
-
-      final status = await Permission.locationWhenInUse.request();
-      if (!mounted) return;
-
-      final isGranted = status.isGranted || status.isLimited;
-      setState(() {
-        _locationPermissionStatus = status;
-        _isRequestingLocation = false;
-        _isUserLocationEnabled = isGranted;
-        _hasCenteredOnUserLocation = false;
-        _message = isGranted
-            ? 'Showing your location.'
-            : status.isPermanentlyDenied
-            ? 'Location permission is disabled. Open settings to enable it.'
-            : 'Location permission was denied.';
-      });
-
-      if (isGranted) {
-        await _goToUserLocation();
-      }
-    } on Exception {
-      if (!mounted) return;
-      setState(() {
-        _isRequestingLocation = false;
-        _isUserLocationEnabled = false;
-        _message = 'Location permission is unavailable right now.';
-      });
-    }
+    final isGranted = await di<LocationManager>().requestPermission();
+    if (isGranted) await _goToUserLocation();
   }
 
   Future<void> _openLocationSettings() async {
@@ -192,16 +131,16 @@ class _MapShellState extends State<MapShell> {
 
   Future<void> _goToUserLocation() async {
     final controller = _controller;
-    if (controller == null || !_isUserLocationEnabled) return;
+    final locationManager = di<LocationManager>();
+    if (controller == null || !locationManager.isUserLocationEnabled) return;
 
     final location =
-        _lastUserLocation ?? await controller.requestMyLocationLatLng();
+        _toLatLng(locationManager.lastUserLocation) ??
+        await controller.requestMyLocationLatLng();
     if (!mounted) return;
 
     if (location == null) {
-      setState(() {
-        _message = 'Waiting for your current location...';
-      });
+      locationManager.markWaitingForLocation();
       return;
     }
 
@@ -217,22 +156,124 @@ class _MapShellState extends State<MapShell> {
   }
 
   void _onUserLocationUpdated(UserLocation location) {
-    final shouldCenter = !_hasCenteredOnUserLocation;
-    _lastUserLocation = location.position;
-
-    if (mounted) {
-      setState(() {
-        _hasCenteredOnUserLocation = true;
-      });
-    }
+    final locationManager = di<LocationManager>();
+    final shouldCenter = !locationManager.hasCenteredOnUserLocation;
+    locationManager.updateUserLocation(_toGeoCoordinate(location.position));
 
     if (shouldCenter) {
       _goToUserLocation();
     }
   }
 
+  Future<void> _navigateToSelectedTarget() async {
+    final target = di<MapSelectionManager>().selectedTarget;
+    if (target == null) return;
+
+    final mode = await _showTransportModeSheet();
+    if (mode == null) return;
+
+    final start = await _currentStartLocation();
+    if (!mounted) return;
+    if (start == null) {
+      di<MapSelectionManager>().setMessage(
+        'Show your location or select a start point before routing.',
+      );
+      return;
+    }
+
+    try {
+      await di<RoutingManager>().requestRoutesCommand.runAsync(
+        DirectNavigationRequest(
+          start: start,
+          destination: _toGeoCoordinate(target.coordinates, target.name),
+          mode: mode,
+        ),
+      );
+      await _syncRouteOverlay();
+    } on Exception catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Route failed: $error')));
+    }
+  }
+
+  Future<TransportMode?> _showTransportModeSheet() {
+    return showModalBottomSheet<TransportMode>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final mode in TransportMode.values)
+              ListTile(
+                leading: Icon(_transportIcon(mode)),
+                title: Text(mode.displayLabel),
+                onTap: () => Navigator.of(context).pop(mode),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<GeoCoordinate?> _currentStartLocation() async {
+    final locationManager = di<LocationManager>();
+    final known = locationManager.lastUserLocation;
+    if (known != null) return known;
+
+    final controller = _controller;
+    if (controller == null || !locationManager.isUserLocationEnabled) {
+      return null;
+    }
+    final location = await controller.requestMyLocationLatLng();
+    if (location == null) return null;
+    final coordinate = _toGeoCoordinate(location);
+    locationManager.updateUserLocation(coordinate);
+    return coordinate;
+  }
+
+  Future<void> _selectRoute(String candidateId) async {
+    di<RoutingManager>().selectCandidate(candidateId);
+    await _syncRouteOverlay();
+  }
+
+  Future<void> _syncRouteOverlay() async {
+    final controller = _controller;
+    if (controller == null) return;
+    final routingManager = di<RoutingManager>();
+    await _routeOverlay.setRoutes(
+      controller: controller,
+      candidates: routingManager.candidates,
+      selectedCandidate: routingManager.selectedCandidate,
+    );
+  }
+
+  void _startNavigation() {
+    di<RoutingManager>().startNavigation();
+  }
+
+  void _stopNavigation() {
+    di<RoutingManager>().stopNavigation();
+  }
+
+  void _openTripPlannerPlaceholder() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Trip planner is coming in the next phase.'),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final selectionManager = watchIt<MapSelectionManager>();
+    final locationManager = watchIt<LocationManager>();
+    final routingManager = watchIt<RoutingManager>();
+    final isRouting = watch(
+      routingManager.requestRoutesCommand.isRunning,
+    ).value;
     final media = MediaQuery.of(context);
     final isWide = media.size.width >= 720;
     final topOrnamentInset = media.padding.top + _topMapOrnamentMargin;
@@ -257,11 +298,11 @@ class _MapShellState extends State<MapShell> {
             logoViewPosition: LogoViewPosition.bottomLeft,
             logoViewMargins: const math.Point(12, 12),
             trackCameraPosition: true,
-            myLocationEnabled: _isUserLocationEnabled,
-            myLocationTrackingMode: _isUserLocationEnabled
+            myLocationEnabled: locationManager.isUserLocationEnabled,
+            myLocationTrackingMode: locationManager.isUserLocationEnabled
                 ? MyLocationTrackingMode.tracking
                 : MyLocationTrackingMode.none,
-            myLocationRenderMode: _isUserLocationEnabled
+            myLocationRenderMode: locationManager.isUserLocationEnabled
                 ? MyLocationRenderMode.compass
                 : MyLocationRenderMode.normal,
             attributionButtonPosition: isWide
@@ -296,10 +337,9 @@ class _MapShellState extends State<MapShell> {
                   ),
                   const SizedBox(height: _mapControlSpacing),
                   LocationButton(
-                    isRequesting: _isRequestingLocation,
-                    isLocationEnabled: _isUserLocationEnabled,
-                    isPermanentlyDenied:
-                        _locationPermissionStatus?.isPermanentlyDenied ?? false,
+                    isRequesting: locationManager.isRequesting,
+                    isLocationEnabled: locationManager.isUserLocationEnabled,
+                    isPermanentlyDenied: locationManager.isPermanentlyDenied,
                     onRequest: _requestUserLocationPermission,
                     onRecenter: _goToUserLocation,
                     onOpenSettings: _openLocationSettings,
@@ -315,9 +355,18 @@ class _MapShellState extends State<MapShell> {
               bottom: 12,
               width: 360,
               child: TargetDetailsPanel(
-                selectedTarget: _selectedTarget,
-                isQuerying: _isQuerying,
-                message: _message,
+                selectedTarget: selectionManager.selectedTarget,
+                isQuerying: selectionManager.isQuerying,
+                message: selectionManager.message ?? locationManager.message,
+                routeCandidates: routingManager.candidates,
+                selectedRoute: routingManager.selectedCandidate,
+                isRouting: isRouting,
+                isNavigationActive: routingManager.isNavigationActive,
+                onNavigate: _navigateToSelectedTarget,
+                onTrip: _openTripPlannerPlaceholder,
+                onSelectRoute: _selectRoute,
+                onStartNavigation: _startNavigation,
+                onStopNavigation: _stopNavigation,
               ),
             )
           else
@@ -331,9 +380,19 @@ class _MapShellState extends State<MapShell> {
                   snap: true,
                   snapSizes: const [0.26, 0.5],
                   builder: (context, scrollController) => TargetDetailsPanel(
-                    selectedTarget: _selectedTarget,
-                    isQuerying: _isQuerying,
-                    message: _message,
+                    selectedTarget: selectionManager.selectedTarget,
+                    isQuerying: selectionManager.isQuerying,
+                    message:
+                        selectionManager.message ?? locationManager.message,
+                    routeCandidates: routingManager.candidates,
+                    selectedRoute: routingManager.selectedCandidate,
+                    isRouting: isRouting,
+                    isNavigationActive: routingManager.isNavigationActive,
+                    onNavigate: _navigateToSelectedTarget,
+                    onTrip: _openTripPlannerPlaceholder,
+                    onSelectRoute: _selectRoute,
+                    onStartNavigation: _startNavigation,
+                    onStopNavigation: _stopNavigation,
                     compact: true,
                     scrollController: scrollController,
                   ),
@@ -344,6 +403,28 @@ class _MapShellState extends State<MapShell> {
       ),
     );
   }
+}
+
+GeoCoordinate _toGeoCoordinate(LatLng location, [String? label]) {
+  return GeoCoordinate(
+    lat: location.latitude,
+    lon: location.longitude,
+    label: label,
+  );
+}
+
+LatLng? _toLatLng(GeoCoordinate? coordinate) {
+  if (coordinate == null) return null;
+  return LatLng(coordinate.lat, coordinate.lon);
+}
+
+IconData _transportIcon(TransportMode mode) {
+  return switch (mode) {
+    TransportMode.walk => Icons.directions_walk,
+    TransportMode.bike => Icons.directions_bike,
+    TransportMode.drive => Icons.directions_car,
+    TransportMode.publicTransport => Icons.directions_transit,
+  };
 }
 
 class _MapZoomButton extends StatelessWidget {

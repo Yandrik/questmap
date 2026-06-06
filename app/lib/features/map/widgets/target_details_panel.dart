@@ -3,6 +3,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
+import '../../../_shared/models/transport_mode.dart';
+import '../../routing/model/navigation_candidate.dart';
 import '../model/selected_map_target.dart';
 import '../services/map_icon_catalog.dart';
 
@@ -11,6 +13,15 @@ class TargetDetailsPanel extends StatelessWidget {
     required this.selectedTarget,
     required this.isQuerying,
     required this.message,
+    required this.routeCandidates,
+    required this.selectedRoute,
+    required this.isRouting,
+    required this.isNavigationActive,
+    required this.onNavigate,
+    required this.onTrip,
+    required this.onSelectRoute,
+    required this.onStartNavigation,
+    required this.onStopNavigation,
     this.compact = false,
     this.scrollController,
     super.key,
@@ -19,6 +30,15 @@ class TargetDetailsPanel extends StatelessWidget {
   final SelectedMapTarget? selectedTarget;
   final bool isQuerying;
   final String? message;
+  final List<NavigationCandidate> routeCandidates;
+  final NavigationCandidate? selectedRoute;
+  final bool isRouting;
+  final bool isNavigationActive;
+  final VoidCallback onNavigate;
+  final VoidCallback onTrip;
+  final ValueChanged<String> onSelectRoute;
+  final VoidCallback onStartNavigation;
+  final VoidCallback onStopNavigation;
   final bool compact;
   final ScrollController? scrollController;
 
@@ -62,32 +82,27 @@ class TargetDetailsPanel extends StatelessWidget {
                           children: [
                             if (!selectedTarget!.isWaypoint)
                               _TargetDetails(target: selectedTarget!),
+                            if (routeCandidates.isNotEmpty) ...[
+                              const SizedBox(height: 16),
+                              _RouteCandidateList(
+                                candidates: routeCandidates,
+                                selectedRoute: selectedRoute,
+                                onSelectRoute: onSelectRoute,
+                              ),
+                            ],
                             const SizedBox(height: 12),
                           ],
                         ),
                 ),
                 if (selectedTarget != null)
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: Colors.blue,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'Navigation target: ${selectedTarget!.name}',
-                            ),
-                          ),
-                        );
-                      },
-                      child: const Text('Navigate to'),
-                    ),
+                  _PanelActions(
+                    isRouting: isRouting,
+                    isNavigationActive: isNavigationActive,
+                    hasRoute: selectedRoute != null,
+                    onNavigate: onNavigate,
+                    onTrip: onTrip,
+                    onStartNavigation: onStartNavigation,
+                    onStopNavigation: onStopNavigation,
                   ),
               ],
             ),
@@ -95,6 +110,207 @@ class TargetDetailsPanel extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _PanelActions extends StatelessWidget {
+  const _PanelActions({
+    required this.isRouting,
+    required this.isNavigationActive,
+    required this.hasRoute,
+    required this.onNavigate,
+    required this.onTrip,
+    required this.onStartNavigation,
+    required this.onStopNavigation,
+  });
+
+  final bool isRouting;
+  final bool isNavigationActive;
+  final bool hasRoute;
+  final VoidCallback onNavigate;
+  final VoidCallback onTrip;
+  final VoidCallback onStartNavigation;
+  final VoidCallback onStopNavigation;
+
+  @override
+  Widget build(BuildContext context) {
+    if (isNavigationActive) {
+      return SizedBox(
+        width: double.infinity,
+        child: FilledButton.icon(
+          style: _filledStyle(context),
+          onPressed: onStopNavigation,
+          icon: const Icon(Icons.stop),
+          label: const Text('Stop navigation'),
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton.icon(
+                style: _filledStyle(context),
+                onPressed: isRouting ? null : onNavigate,
+                icon: isRouting
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.near_me),
+                label: const Text('Navigate to'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                onPressed: onTrip,
+                icon: const Icon(Icons.auto_awesome),
+                label: const Text('Trip'),
+              ),
+            ),
+          ],
+        ),
+        if (hasRoute) ...[
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              style: _filledStyle(context),
+              onPressed: onStartNavigation,
+              icon: const Icon(Icons.play_arrow),
+              label: const Text('Start navigation'),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  static ButtonStyle _filledStyle(BuildContext context) {
+    return FilledButton.styleFrom(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+    );
+  }
+}
+
+class _RouteCandidateList extends StatelessWidget {
+  const _RouteCandidateList({
+    required this.candidates,
+    required this.selectedRoute,
+    required this.onSelectRoute,
+  });
+
+  final List<NavigationCandidate> candidates;
+  final NavigationCandidate? selectedRoute;
+  final ValueChanged<String> onSelectRoute;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Routes',
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 8),
+        for (final candidate in candidates) ...[
+          _RouteCandidateTile(
+            candidate: candidate,
+            isSelected: candidate.id == selectedRoute?.id,
+            onTap: () => onSelectRoute(candidate.id),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+}
+
+class _RouteCandidateTile extends StatelessWidget {
+  const _RouteCandidateTile({
+    required this.candidate,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  final NavigationCandidate candidate;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final borderColor = isSelected
+        ? theme.colorScheme.primary
+        : theme.colorScheme.outlineVariant;
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: onTap,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: borderColor, width: isSelected ? 2 : 1),
+          color: isSelected
+              ? theme.colorScheme.primaryContainer.withValues(alpha: 0.35)
+              : theme.colorScheme.surfaceContainerHighest.withValues(
+                  alpha: 0.36,
+                ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Row(
+            children: [
+              Icon(_modeIcon(candidate.mode), color: theme.colorScheme.primary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      candidate.mode.displayLabel,
+                      style: theme.textTheme.labelLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      candidate.summaryLabel,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (isSelected) const Icon(Icons.check_circle, size: 20),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  IconData _modeIcon(TransportMode mode) {
+    return switch (mode) {
+      TransportMode.walk => Icons.directions_walk,
+      TransportMode.bike => Icons.directions_bike,
+      TransportMode.drive => Icons.directions_car,
+      TransportMode.publicTransport => Icons.directions_transit,
+    };
   }
 }
 

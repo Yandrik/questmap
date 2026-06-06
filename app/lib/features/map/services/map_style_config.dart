@@ -10,6 +10,10 @@ class MapStyleConfig {
 
   static const selectionSourceId = 'meander-selection';
   static const selectionLayerId = 'meander-selection-circle';
+  static const routeAlternativesSourceId = 'meander-route-alternatives';
+  static const routeAlternativesLayerId = 'meander-route-alternatives-line';
+  static const routeSelectedSourceId = 'meander-route-selected';
+  static const routeSelectedLayerId = 'meander-route-selected-line';
 
   static const interactiveLayerIds = <String>[
     'poi-icons-priority',
