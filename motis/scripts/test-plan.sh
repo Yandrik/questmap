@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MOTIS_URL="${MOTIS_URL:-http://localhost:8080}"
+MOTIS_URL="${MOTIS_URL:-http://localhost:8010}"
 ROUTE_TIME="${ROUTE_TIME:-2026-06-06T14:00:00+02:00}"
 
 curl -fsS -G "$MOTIS_URL/api/v6/plan" \

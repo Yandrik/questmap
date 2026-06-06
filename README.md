@@ -19,7 +19,7 @@ The API is available at `http://localhost:8000`.
 
 SurrealDB is also exposed on `localhost:8001` for local CLI or SDK access.
 Valhalla is exposed on `localhost:8002` for direct routing API access.
-MOTIS is exposed on `localhost:8080` for direct transit routing API access.
+MOTIS is exposed on `localhost:8010` for direct transit routing API access.
 
 Default local credentials:
 
@@ -76,12 +76,12 @@ Docker Compose also runs the local MOTIS image from `motis/`, using
 
 ```sh
 docker compose up motis
-curl http://localhost:8080/api/v1/health
+curl http://localhost:8010/api/v1/health
 ```
 
 Prepare/import MOTIS data through the scripts documented in `motis/README.md`
 before starting the server. The backend reads `MOTIS_URL` and defaults to
-`http://localhost:8080` outside Compose. The Python integration uses `httpx`
+`http://localhost:8010` outside Compose. The Python integration uses `httpx`
 with a Pydantic request model mirroring the MOTIS OpenAPI `/api/v6/plan` query
 schema. The Flutter app uses `dio` with matching Dart request models in
 `app/lib/motis_client.dart`. The OpenAPI source used for reference is checked
@@ -128,7 +128,7 @@ SURREALDB_DATABASE=questmap \
 SURREALDB_USERNAME=root \
 SURREALDB_PASSWORD=root \
 VALHALLA_URL=http://localhost:8002 \
-MOTIS_URL=http://localhost:8080 \
+MOTIS_URL=http://localhost:8010 \
 uv run fastapi dev main.py --host 0.0.0.0 --port 8000
 ```
 

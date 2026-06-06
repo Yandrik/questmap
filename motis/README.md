@@ -51,7 +51,7 @@ cd motis
 docker compose up -d motis
 ```
 
-MOTIS is exposed on `http://localhost:8080` by default. Override with `MOTIS_PORT`:
+MOTIS is exposed on `http://localhost:8010` by default. Override with `MOTIS_PORT`:
 
 ```sh
 MOTIS_PORT=8081 docker compose up -d motis
@@ -62,7 +62,7 @@ MOTIS_PORT=8081 docker compose up -d motis
 After import and startup:
 
 ```sh
-curl http://localhost:8080/
+curl http://localhost:8010/
 ./scripts/test-plan.sh
 ```
 

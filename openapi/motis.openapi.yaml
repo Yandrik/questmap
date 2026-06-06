@@ -33,7 +33,7 @@ servers:
     description: Transitous production server
   - url: https://staging.api.transitous.org
     description: Transitous staging server
-  - url: http://localhost:8080
+  - url: http://localhost:8010
     description: Local MOTIS server
 paths:
   /api/v6/plan:
