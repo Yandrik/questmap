@@ -13,13 +13,6 @@
                 "--port", "8000"
             ],
             "cwd": "${workspaceFolder}/backend",
-            "env": {
-                "SURREALDB_URL": "ws://localhost:8001",
-                "SURREALDB_NAMESPACE": "questmap",
-                "SURREALDB_DATABASE": "questmap",
-                "SURREALDB_USERNAME": "root",
-                "SURREALDB_PASSWORD": "root"
-            },
             "jinja": true,
             "justMyCode": true
         }

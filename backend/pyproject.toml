@@ -10,7 +10,7 @@ dependencies = [
     "pydantic>=2.13.4",
     "pydantic-ai>=1.106.0",
     "pydantic-settings>=2.14.1",
-    "surrealdb-orm[cli]>=0.14.0",
+    "surrealdb>=1.0.0",
 ]
 
 [dependency-groups]

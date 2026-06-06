@@ -1,16 +1,14 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from surreal_orm import SurrealDBConnectionManager
-from surreal_orm.connection_manager import SurrealDbConnectionError
-from surreal_orm.migrations.executor import MigrationExecutor
+from surrealdb import AsyncSurreal, RecordID
 
+from db import SurrealConnection, dict_to_route, dict_to_trip, init_db
 from models import Activity, Route, Trip
 from models import RouteStep as RouteStepModel
 from motis import MotisClient, MotisPlanRequest
@@ -54,22 +52,11 @@ class MotisSettings(BaseSettings):
     url: str = Field(default="http://localhost:8010")
 
 
-
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
     valhalla_settings = ValhallaSettings()
     motis_settings = MotisSettings()
-
-    SurrealDBConnectionManager.set_connection(
-        url=settings.url,
-        user=settings.username,
-        password=settings.password,
-        namespace=settings.namespace,
-        database=settings.database,
-    )
 
     app.state.settings = settings
     app.state.valhalla_settings = valhalla_settings
@@ -77,15 +64,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.valhalla = ValhallaClient(valhalla_settings.url)
     app.state.motis = MotisClient(motis_settings.url)
 
-    migrations = MigrationExecutor(Path(__file__).parent / "migrations")
-    await migrations.migrate()
+    async with AsyncSurreal(settings.url) as db:
+        await db.signin({"username": settings.username, "password": settings.password})
+        await db.use(settings.namespace, settings.database)
+        await init_db(db)
+        app.state.db = db
 
-    try:
-        yield
-    finally:
-        await app.state.motis.close()
-        await app.state.valhalla.close()
-        await SurrealDBConnectionManager.close_connection()
+        try:
+            yield
+        finally:
+            await app.state.motis.close()
+            await app.state.valhalla.close()
 
 
 app = FastAPI(title="Questmap API", lifespan=lifespan)
@@ -110,11 +99,11 @@ async def health() -> HealthResponse:
 @app.get("/db/health")
 async def database_health(request: Request) -> DatabaseHealthResponse:
     settings: Settings = request.app.state.settings
+    db = request.app.state.db
 
     try:
-        async with SurrealDBConnectionManager() as client:
-            await client.query("RETURN true;")
-    except SurrealDbConnectionError as exc:
+        await db.query("RETURN true;")
+    except Exception as exc:
         raise HTTPException(status_code=503, detail="SurrealDB is unavailable") from exc
 
     return DatabaseHealthResponse(
@@ -211,38 +200,33 @@ def _trip_to_response(trip: Trip) -> TripResponse:
 
 
 @app.post("/trips", status_code=201)
-async def create_trip(body: TripCreate) -> TripResponse:
-    trip = Trip(
-        start_time=body.start_time,
-        start_location=body.start_location,
-        end_time=body.end_time,
-        end_location=body.end_location,
-        activities=[
-            Activity(
-                type=a.type,
-                duration_minutes=a.duration_minutes,
-                specification=a.specification,
-            )
-            for a in body.activities
-        ],
-    )
-    await trip.save()
+async def create_trip(body: TripCreate, request: Request) -> TripResponse:
+    db = request.app.state.db
+    result = await db.create("trip", {
+        "start_time": body.start_time,
+        "start_location": body.start_location,
+        "end_time": body.end_time,
+        "end_location": body.end_location,
+        "activities": [a.model_dump() for a in body.activities],
+    })
+    trip = dict_to_trip(result[0] if isinstance(result, list) else result)
     return _trip_to_response(trip)
 
 
 @app.get("/trips")
-async def list_trips() -> list[TripResponse]:
-    trips = await Trip.objects().all()
-    return [_trip_to_response(t) for t in trips]
+async def list_trips(request: Request) -> list[TripResponse]:
+    db = request.app.state.db
+    result = await db.select("trip")
+    return [_trip_to_response(dict_to_trip(r)) for r in (result or [])]
 
 
 @app.get("/trips/{trip_id}")
-async def get_trip(trip_id: str) -> TripResponse:
-    try:
-        trip = await Trip.objects().get(trip_id)
-    except Trip.DoesNotExist as exc:
-        raise HTTPException(status_code=404, detail="Trip not found") from exc
-    return _trip_to_response(trip)
+async def get_trip(trip_id: str, request: Request) -> TripResponse:
+    db = request.app.state.db
+    result = await db.select(RecordID("trip", trip_id))
+    if result is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    return _trip_to_response(dict_to_trip(result))
 
 
 # ---------------------------------------------------------------------------
@@ -260,26 +244,28 @@ def _route_to_response(route_obj: Route) -> RouteResponse:
 
 
 @app.post("/routes", status_code=201)
-async def create_route(body: RouteCreate) -> RouteResponse:
-    route_obj = Route(
-        name=body.name,
-        trip_id=body.trip_id,
-        steps=[RouteStepModel(**s.model_dump()) for s in body.steps],
-    )
-    await route_obj.save()
+async def create_route(body: RouteCreate, request: Request) -> RouteResponse:
+    db = request.app.state.db
+    result = await db.create("route", {
+        "name": body.name,
+        "trip_id": body.trip_id,
+        "steps": [s.model_dump(mode="json") for s in body.steps],
+    })
+    route_obj = dict_to_route(result[0] if isinstance(result, list) else result)
     return _route_to_response(route_obj)
 
 
 @app.get("/routes")
-async def list_routes() -> list[RouteResponse]:
-    routes = await Route.objects().all()
-    return [_route_to_response(r) for r in routes]
+async def list_routes(request: Request) -> list[RouteResponse]:
+    db = request.app.state.db
+    result = await db.select("route")
+    return [_route_to_response(dict_to_route(r)) for r in (result or [])]
 
 
 @app.get("/routes/{route_id}")
-async def get_route(route_id: str) -> RouteResponse:
-    try:
-        route_obj = await Route.objects().get(route_id)
-    except Route.DoesNotExist as exc:
-        raise HTTPException(status_code=404, detail="Route not found") from exc
-    return _route_to_response(route_obj)
+async def get_route(route_id: str, request: Request) -> RouteResponse:
+    db = request.app.state.db
+    result = await db.select(RecordID("route", route_id))
+    if result is None:
+        raise HTTPException(status_code=404, detail="Route not found")
+    return _route_to_response(dict_to_route(result))
