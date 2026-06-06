@@ -13,8 +13,11 @@ import '../../../app/app_config.dart';
 import '../../location/manager/location_manager.dart';
 import '../../routing/manager/routing_manager.dart';
 import '../../routing/model/direct_navigation_request.dart';
+import '../../trip_planning/manager/trip_agent_manager.dart';
 import '../../trip_planning/manager/trip_draft_manager.dart';
+import '../../trip_planning/manager/trip_plan_manager.dart';
 import '../../trip_planning/widgets/trip_composer_panel.dart';
+import '../../trip_planning/widgets/trip_planning_overlay.dart';
 import '../manager/map_selection_manager.dart';
 import '../model/rendered_map_feature.dart';
 import '../model/selected_map_target.dart';
@@ -52,6 +55,7 @@ class _MapShellState extends State<MapShell> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _requestUserLocationPermission();
+      di<TripPlanManager>().loadActivePlan();
     });
   }
 
@@ -285,6 +289,7 @@ class _MapShellState extends State<MapShell> {
     final selectionManager = watchIt<MapSelectionManager>();
     final locationManager = watchIt<LocationManager>();
     final routingManager = watchIt<RoutingManager>();
+    final agentManager = watchIt<TripAgentManager>();
     final isRouting = watch(
       routingManager.requestRoutesCommand.isRunning,
     ).value;
@@ -428,6 +433,8 @@ class _MapShellState extends State<MapShell> {
                 ),
               ),
             ),
+          if (agentManager.isPlanning)
+            const Positioned.fill(child: TripPlanningOverlay()),
         ],
       ),
     );

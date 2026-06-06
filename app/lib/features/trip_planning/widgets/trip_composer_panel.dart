@@ -4,9 +4,12 @@ import 'package:watch_it/watch_it.dart';
 import '../../../_shared/models/geo_coordinate.dart';
 import '../../../_shared/models/transport_mode.dart';
 import '../../map/model/selected_map_target.dart';
+import '../manager/trip_agent_manager.dart';
 import '../manager/trip_draft_manager.dart';
+import '../manager/trip_plan_manager.dart';
 import '../model/itinerary_step_draft.dart';
 import '../model/location_constraint.dart';
+import '../model/trip_plan.dart';
 import '../model/trip_draft.dart';
 
 class TripComposerPanel extends WatchingWidget {
@@ -24,6 +27,8 @@ class TripComposerPanel extends WatchingWidget {
   @override
   Widget build(BuildContext context) {
     final manager = watchIt<TripDraftManager>();
+    final planManager = watchIt<TripPlanManager>();
+    final agentManager = watchIt<TripAgentManager>();
     final draft = manager.draft;
     final theme = Theme.of(context);
 
@@ -77,6 +82,10 @@ class TripComposerPanel extends WatchingWidget {
                                 ],
                               ),
                       ),
+                      if (planManager.currentPlan != null) ...[
+                        const SizedBox(height: 10),
+                        _TripPlanSection(planManager: planManager),
+                      ],
                       Row(
                         children: [
                           Expanded(
@@ -89,7 +98,10 @@ class TripComposerPanel extends WatchingWidget {
                           const SizedBox(width: 8),
                           Expanded(
                             child: FilledButton.icon(
-                              onPressed: draft.steps.isEmpty ? null : () {},
+                              onPressed:
+                                  draft.steps.isEmpty || agentManager.isPlanning
+                                  ? null
+                                  : () => agentManager.startPlanning(draft),
                               icon: const Icon(Icons.auto_awesome),
                               label: const Text('Plan trip'),
                             ),
@@ -128,6 +140,103 @@ class TripComposerPanel extends WatchingWidget {
       Duration(minutes: steps[index].time.durationMinutes),
     );
     return nextStart.difference(currentEnd).inMinutes > 30;
+  }
+}
+
+class _TripPlanSection extends StatelessWidget {
+  const _TripPlanSection({required this.planManager});
+
+  final TripPlanManager planManager;
+
+  @override
+  Widget build(BuildContext context) {
+    final plan = planManager.currentPlan;
+    if (plan == null) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        color: theme.colorScheme.primaryContainer.withValues(alpha: 0.25),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    plan.title,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: planManager.isTripActive
+                      ? planManager.stopTrip
+                      : planManager.startTrip,
+                  icon: Icon(
+                    planManager.isTripActive ? Icons.stop : Icons.play_arrow,
+                  ),
+                  label: Text(planManager.isTripActive ? 'Stop' : 'Start'),
+                ),
+              ],
+            ),
+            if (plan.summary != null)
+              Text(plan.summary!, style: theme.textTheme.bodySmall),
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 260),
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final item in plan.items)
+                    _TripPlanItemTile(
+                      item: item,
+                      isDone: planManager.completedItemIds.contains(item.id),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TripPlanItemTile extends StatelessWidget {
+  const _TripPlanItemTile({required this.item, required this.isDone});
+
+  final TripPlanItem item;
+  final bool isDone;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final subtitle = item.reasoning == null || item.reasoning!.isEmpty
+        ? item.description
+        : '${item.description}\nReasoning: ${item.reasoning}';
+
+    return CheckboxListTile(
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      value: isDone,
+      onChanged: (_) => di<TripPlanManager>().toggleItemDone(item.id),
+      title: Text(
+        item.title,
+        style: theme.textTheme.bodyMedium?.copyWith(
+          decoration: isDone ? TextDecoration.lineThrough : null,
+        ),
+      ),
+      subtitle: Text(subtitle, maxLines: 4, overflow: TextOverflow.ellipsis),
+      secondary: Icon(
+        item.type == TripPlanItemType.travel ? Icons.route : Icons.place,
+      ),
+    );
   }
 }
 
