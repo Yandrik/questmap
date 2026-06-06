@@ -194,6 +194,16 @@ async def search_pois(city: str, lat: float, lon: float, radius_meters: int, cat
         #print("search_pois result (filtered):", filtered_result)
         return json.dumps(filtered_result, ensure_ascii=False)
 
+@agent.tool_plain
+async def prompt_user(message: str) -> str:
+    """
+    Prompt the user for input during the planning process.
+    The agent can use this to ask clarifying questions or get preferences.
+    """
+    print(f"Agent asks: {message}")
+    user_input = input("Your answer: ")
+    return user_input
+
 async def plan_trip(inp: TripPlanInput) -> TripPlanOutput:
     prompt = f"""
 Plan a city trip route using the heatmap image and map context.
