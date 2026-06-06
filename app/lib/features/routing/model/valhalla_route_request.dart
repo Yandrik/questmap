@@ -27,6 +27,16 @@ enum ValhallaShapeFormat {
   final String value;
 }
 
+enum ValhallaDirectionsType {
+  none('none'),
+  maneuvers('maneuvers'),
+  instructions('instructions');
+
+  const ValhallaDirectionsType(this.value);
+
+  final String value;
+}
+
 class ValhallaLocation {
   const ValhallaLocation({
     required this.lat,
@@ -54,6 +64,8 @@ class ValhallaRouteRequest {
     this.costing = ValhallaCosting.pedestrian,
     this.costingOptions,
     this.directionsOptions,
+    this.alternates,
+    this.directionsType,
     this.shapeFormat = ValhallaShapeFormat.polyline6,
     this.units = 'kilometers',
     this.language,
@@ -63,6 +75,8 @@ class ValhallaRouteRequest {
   final ValhallaCosting costing;
   final Map<String, Object?>? costingOptions;
   final Map<String, Object?>? directionsOptions;
+  final int? alternates;
+  final ValhallaDirectionsType? directionsType;
   final ValhallaShapeFormat shapeFormat;
   final String units;
   final String? language;
@@ -81,6 +95,8 @@ class ValhallaRouteRequest {
       'costing': costing.value,
       if (costingOptions != null) 'costing_options': costingOptions,
       if (directionsOptions != null) 'directions_options': directionsOptions,
+      if (alternates != null) 'alternates': alternates,
+      if (directionsType != null) 'directions_type': directionsType!.value,
       'shape_format': shapeFormat.value,
       'units': units,
       if (language != null) 'language': language,
