@@ -4,7 +4,7 @@ set -euo pipefail
 MOTIS_URL="${MOTIS_URL:-http://localhost:8080}"
 ROUTE_TIME="${ROUTE_TIME:-2026-06-06T14:00:00+02:00}"
 
-curl -G "$MOTIS_URL/api/v6/plan" \
+curl -fsS -G "$MOTIS_URL/api/v6/plan" \
   --data-urlencode "fromPlace=48.7758,9.1829" \
   --data-urlencode "toPlace=48.3984,9.9916" \
   --data-urlencode "time=$ROUTE_TIME" \

@@ -22,7 +22,7 @@ services:
         TARGETARCH: ${MOTIS_TARGETARCH:-amd64}
     profiles: ["import"]
     entrypoint: ["/motis"]
-    command: ["import"]
+    command: ["import", "--data", "/data", "--config", "/data/config.yml"]
     working_dir: /data
     user: root
     volumes:

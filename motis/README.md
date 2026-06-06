@@ -42,7 +42,7 @@ cd motis
 ./scripts/import.sh
 ```
 
-This runs `motis import` against `./data`. Do not overwrite files in `./data` while a MOTIS server is running. For production updates, import into a staging directory and swap directories while the service is stopped.
+This runs `motis import --data /data --config /data/config.yml` against `./data`. Do not overwrite files in `./data` while a MOTIS server is running. For production updates, import into a staging directory and swap directories while the service is stopped.
 
 ## Run
 
