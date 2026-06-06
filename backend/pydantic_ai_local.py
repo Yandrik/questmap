@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Literal
 import httpx
+from os import getenv
 
 from pydantic import BaseModel, Field, field_validator
 from pydantic_ai import Agent, BinaryContent
@@ -104,7 +105,7 @@ class Deps:
 
 ollama_model = OpenAIModel(
     model_name='Qwen3.6-27B-MTP-GGUF',  # or 'llama3.2' without the tag
-    provider=OpenAIProvider(base_url='https://superblock69420mcserver.duckdns.org/meander/v1')
+    provider=OpenAIProvider(base_url=getenv("BACKENDPOINT_URL"))
 )
 
 # Create the Agent
