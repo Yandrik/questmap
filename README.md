@@ -12,8 +12,14 @@ The API is available at `http://localhost:8000`.
 
 - `GET /health` checks the API process.
 - `GET /db/health` checks the SurrealDB connection.
+- `GET /routing/health` checks the Valhalla routing service.
+- `POST /routing/route` proxies typed Valhalla `/route` requests.
+- `GET /transit/health` checks the MOTIS transit routing service.
+- `POST /transit/plan` proxies typed MOTIS `/api/v6/plan` requests.
 
 SurrealDB is also exposed on `localhost:8001` for local CLI or SDK access.
+Valhalla is exposed on `localhost:8002` for direct routing API access.
+MOTIS is exposed on `localhost:8080` for direct transit routing API access.
 
 Default local credentials:
 
@@ -21,6 +27,65 @@ Default local credentials:
 - Password: `root`
 - Namespace: `questmap`
 - Database: `questmap`
+
+### Valhalla routing
+
+Docker Compose runs `ghcr.io/valhalla/valhalla-scripted:latest` and mounts
+`./motis/data/valhalla` at `/custom_files`. Prepare the Bayern +
+Baden-Wuerttemberg extract with the MOTIS data script first:
+
+```sh
+./motis/scripts/prepare-by-bw-data.sh
+docker compose up valhalla
+curl http://localhost:8002/status
+```
+
+The script downloads the Bayern and Baden-Wuerttemberg Geofabrik extracts,
+merges them into `motis/data/by-bw.osm.pbf`, and hard-links or copies that
+merged PBF into `motis/data/valhalla/by-bw.osm.pbf`. The scripted Valhalla
+image builds graph tiles from that local PBF and stores its generated files next
+to it.
+
+To route somewhere else, set `VALHALLA_TILE_URLS` before starting Compose or put
+a different `.osm.pbf` into `motis/data/valhalla`. Using one local merged PBF is
+preferred over Valhalla's multi-URL build mode.
+
+```sh
+VALHALLA_TILE_URLS=https://download.geofabrik.de/europe/germany/berlin-latest.osm.pbf \
+  docker compose up --build
+```
+
+Useful Valhalla settings are exposed through Compose variables:
+
+- `VALHALLA_TILE_URLS`: one or more space-separated `.osm.pbf` URLs.
+- `VALHALLA_SERVER_THREADS`: tile build and service thread count, default `2`.
+- `VALHALLA_BUILD_ELEVATION`: set `True` or `Force` to include elevation data.
+- `VALHALLA_USE_TILES_IGNORE_PBF`: defaults to `True`, so existing tiles are
+  preferred when available.
+
+The backend reads `VALHALLA_URL` and defaults to `http://localhost:8002` outside
+Compose. The Python integration uses `httpx` with Pydantic request models
+mirroring the Valhalla OpenAPI `/route` schema. The Flutter app uses `dio` with
+matching Dart request models in `app/lib/valhalla_client.dart`. The OpenAPI
+source used for reference is checked in at `openapi/valhalla.openapi.yaml`.
+
+### MOTIS transit routing
+
+Docker Compose also runs the local MOTIS image from `motis/`, using
+`motis/data` as its read-only data directory:
+
+```sh
+docker compose up motis
+curl http://localhost:8080/api/v1/health
+```
+
+Prepare/import MOTIS data through the scripts documented in `motis/README.md`
+before starting the server. The backend reads `MOTIS_URL` and defaults to
+`http://localhost:8080` outside Compose. The Python integration uses `httpx`
+with a Pydantic request model mirroring the MOTIS OpenAPI `/api/v6/plan` query
+schema. The Flutter app uses `dio` with matching Dart request models in
+`app/lib/motis_client.dart`. The OpenAPI source used for reference is checked
+in at `openapi/motis.openapi.yaml`.
 
 ### Local development
 
@@ -62,6 +127,8 @@ SURREALDB_NAMESPACE=questmap \
 SURREALDB_DATABASE=questmap \
 SURREALDB_USERNAME=root \
 SURREALDB_PASSWORD=root \
+VALHALLA_URL=http://localhost:8002 \
+MOTIS_URL=http://localhost:8080 \
 uv run fastapi dev main.py --host 0.0.0.0 --port 8000
 ```
 
@@ -73,6 +140,8 @@ Check both services:
 ```sh
 curl http://localhost:8000/health
 curl http://localhost:8000/db/health
+curl http://localhost:8000/routing/health
+curl http://localhost:8000/transit/health
 ```
 
 ### Backend quality checks

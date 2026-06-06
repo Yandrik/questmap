@@ -1,0 +1,1254 @@
+{
+  "version": 8,
+  "name": "OpenMapTiles OSM US",
+  "center": [
+    -122.4194,
+    37.7749
+  ],
+  "zoom": 13,
+  "sources": {
+    "omt": {
+      "type": "vector",
+      "url": "https://tiles.openstreetmap.us/vector/openmaptiles.json"
+    }
+  },
+  "glyphs": "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "#f5f1e8"
+      }
+    },
+    {
+      "id": "water",
+      "type": "fill",
+      "source": "omt",
+      "source-layer": "water",
+      "paint": {
+        "fill-color": "#a9d3df"
+      }
+    },
+    {
+      "id": "landcover",
+      "type": "fill",
+      "source": "omt",
+      "source-layer": "landcover",
+      "paint": {
+        "fill-color": [
+          "match",
+          [
+            "get",
+            "class"
+          ],
+          "wood",
+          "#c9d8ad",
+          "grass",
+          "#d8e7bf",
+          "sand",
+          "#eadcae",
+          "#ebe5d8"
+        ],
+        "fill-opacity": 0.7
+      }
+    },
+    {
+      "id": "landuse",
+      "type": "fill",
+      "source": "omt",
+      "source-layer": "landuse",
+      "paint": {
+        "fill-color": [
+          "match",
+          [
+            "get",
+            "class"
+          ],
+          "park",
+          "#d7e8be",
+          "residential",
+          "#eee8dc",
+          "industrial",
+          "#ded7d4",
+          "school",
+          "#f0ddc0",
+          "hospital",
+          "#f1d1d1",
+          "#ece4d7"
+        ],
+        "fill-opacity": 0.7
+      }
+    },
+    {
+      "id": "park",
+      "type": "fill",
+      "source": "omt",
+      "source-layer": "park",
+      "paint": {
+        "fill-color": "#cfe6b8",
+        "fill-opacity": 0.75
+      }
+    },
+    {
+      "id": "transportation-casing",
+      "type": "line",
+      "source": "omt",
+      "source-layer": "transportation",
+      "paint": {
+        "line-color": [
+          "match",
+          [
+            "get",
+            "class"
+          ],
+          "motorway",
+          "#cf5e75",
+          "trunk",
+          "#d69a55",
+          "primary",
+          "#d69a55",
+          "secondary",
+          "#caa56a",
+          "#b8b5aa"
+        ],
+        "line-width": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          5,
+          0.7,
+          12,
+          2.8,
+          16,
+          12
+        ],
+        "line-opacity": 0.55
+      }
+    },
+    {
+      "id": "transportation",
+      "type": "line",
+      "source": "omt",
+      "source-layer": "transportation",
+      "layout": {
+        "line-cap": "round",
+        "line-join": "round"
+      },
+      "paint": {
+        "line-color": [
+          "match",
+          [
+            "get",
+            "class"
+          ],
+          "motorway",
+          "#e9889d",
+          "trunk",
+          "#f1bf7a",
+          "primary",
+          "#f1bf7a",
+          "secondary",
+          "#f2d69a",
+          "tertiary",
+          "#ffffff",
+          "minor",
+          "#ffffff",
+          "service",
+          "#ffffff",
+          "path",
+          "#d6d0bd",
+          "track",
+          "#d6d0bd",
+          "#f8f7f2"
+        ],
+        "line-width": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          5,
+          0.45,
+          12,
+          1.8,
+          16,
+          8
+        ]
+      }
+    },
+    {
+      "id": "building",
+      "type": "fill",
+      "source": "omt",
+      "source-layer": "building",
+      "paint": {
+        "fill-color": "#d7cec6",
+        "fill-outline-color": "#c9beb6"
+      }
+    },
+    {
+      "id": "boundary",
+      "type": "line",
+      "source": "omt",
+      "source-layer": "boundary",
+      "paint": {
+        "line-color": "#8d618b",
+        "line-dasharray": [
+          2,
+          2
+        ],
+        "line-opacity": 0.65,
+        "line-width": 1
+      }
+    },
+    {
+      "id": "poi-dots-other",
+      "type": "symbol",
+      "source": "omt",
+      "source-layer": "poi",
+      "minzoom": 16,
+      "filter": [
+        "all",
+        [
+          "!",
+          [
+            "any",
+            [
+              "in",
+              [
+                "get",
+                "subclass"
+              ],
+              [
+                "literal",
+                [
+                  "playground",
+                  "recycling",
+                  "waste_basket",
+                  "post_box",
+                  "bicycle_parking",
+                  "parking",
+                  "toilets",
+                  "drinking_water",
+                  "shelter",
+                  "picnic_site",
+                  "picnic_table",
+                  "camp_site",
+                  "campsite",
+                  "dog_park",
+                  "fitness_station",
+                  "fitness_centre",
+                  "pitch",
+                  "garden",
+                  "telephone",
+                  "entrance",
+                  "gate",
+                  "bench",
+                  "viewpoint",
+                  "memorial",
+                  "statue",
+                  "information",
+                  "artwork",
+                  "theatre",
+                  "museum",
+                  "cinema",
+                  "community_centre",
+                  "pharmacy",
+                  "bank",
+                  "restaurant",
+                  "pub"
+                ]
+              ]
+            ],
+            [
+              "in",
+              [
+                "get",
+                "class"
+              ],
+              [
+                "literal",
+                [
+                  "shop",
+                  "office",
+                  "town_hall",
+                  "fast_food",
+                  "bus",
+                  "railway",
+                  "aerialway",
+                  "laundry",
+                  "grocery",
+                  "library",
+                  "college",
+                  "lodging",
+                  "ice_cream",
+                  "post",
+                  "cafe",
+                  "school",
+                  "alcohol_shop",
+                  "bar",
+                  "harbor",
+                  "car",
+                  "hospital",
+                  "cemetery",
+                  "attraction",
+                  "beer",
+                  "music",
+                  "stadium",
+                  "art_gallery",
+                  "clothing_store",
+                  "swimming",
+                  "castle",
+                  "atm",
+                  "fuel",
+                  "park",
+                  "golf"
+                ]
+              ]
+            ]
+          ]
+        ]
+      ],
+      "layout": {
+        "icon-image": "omt-circle",
+        "icon-size": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          13,
+          0.12,
+          16,
+          0.22,
+          18,
+          0.32
+        ],
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true,
+        "icon-padding": 1
+      },
+      "paint": {
+        "icon-color": "#734a08",
+        "icon-halo-color": "#ffffff",
+        "icon-halo-width": 0.5
+      }
+    },
+    {
+      "id": "poi-dots-known-dense",
+      "type": "symbol",
+      "source": "omt",
+      "source-layer": "poi",
+      "minzoom": 15,
+      "filter": [
+        "all",
+        [
+          "!",
+          [
+            "any",
+            [
+              "in",
+              [
+                "get",
+                "subclass"
+              ],
+              [
+                "literal",
+                [
+                  "playground",
+                  "recycling",
+                  "waste_basket",
+                  "post_box",
+                  "bicycle_parking",
+                  "parking",
+                  "toilets",
+                  "drinking_water",
+                  "shelter",
+                  "picnic_site",
+                  "picnic_table",
+                  "camp_site",
+                  "campsite",
+                  "dog_park",
+                  "fitness_station",
+                  "fitness_centre"
+                ]
+              ]
+            ],
+            [
+              "in",
+              [
+                "get",
+                "class"
+              ],
+              [
+                "literal",
+                [
+                  "shop",
+                  "office",
+                  "town_hall",
+                  "fast_food",
+                  "bus",
+                  "railway",
+                  "aerialway",
+                  "laundry",
+                  "grocery",
+                  "library",
+                  "college",
+                  "lodging",
+                  "ice_cream",
+                  "post",
+                  "cafe",
+                  "school",
+                  "alcohol_shop",
+                  "bar",
+                  "harbor",
+                  "car",
+                  "hospital",
+                  "cemetery",
+                  "attraction",
+                  "beer",
+                  "music",
+                  "stadium",
+                  "art_gallery",
+                  "clothing_store",
+                  "swimming",
+                  "castle",
+                  "atm",
+                  "fuel"
+                ]
+              ]
+            ]
+          ]
+        ],
+        [
+          "any",
+          [
+            "in",
+            [
+              "get",
+              "subclass"
+            ],
+            [
+              "literal",
+              [
+                "playground",
+                "recycling",
+                "waste_basket",
+                "post_box",
+                "bicycle_parking",
+                "parking",
+                "toilets",
+                "drinking_water",
+                "shelter",
+                "picnic_site",
+                "picnic_table",
+                "camp_site",
+                "campsite",
+                "dog_park",
+                "fitness_station",
+                "fitness_centre",
+                "pitch",
+                "garden",
+                "telephone",
+                "entrance",
+                "gate",
+                "bench",
+                "viewpoint",
+                "memorial",
+                "statue",
+                "information",
+                "artwork",
+                "theatre",
+                "museum",
+                "cinema",
+                "community_centre",
+                "pharmacy",
+                "bank",
+                "restaurant",
+                "pub"
+              ]
+            ]
+          ],
+          [
+            "in",
+            [
+              "get",
+              "class"
+            ],
+            [
+              "literal",
+              [
+                "shop",
+                "office",
+                "town_hall",
+                "fast_food",
+                "bus",
+                "railway",
+                "aerialway",
+                "laundry",
+                "grocery",
+                "library",
+                "college",
+                "lodging",
+                "ice_cream",
+                "post",
+                "cafe",
+                "school",
+                "alcohol_shop",
+                "bar",
+                "harbor",
+                "car",
+                "hospital",
+                "cemetery",
+                "attraction",
+                "beer",
+                "music",
+                "stadium",
+                "art_gallery",
+                "clothing_store",
+                "swimming",
+                "castle",
+                "atm",
+                "fuel",
+                "park",
+                "golf"
+              ]
+            ]
+          ]
+        ]
+      ],
+      "layout": {
+        "icon-image": "omt-circle",
+        "icon-size": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          13,
+          0.12,
+          16,
+          0.22,
+          18,
+          0.32
+        ],
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true,
+        "icon-padding": 1
+      },
+      "paint": {
+        "icon-color": [
+          "match",
+          [
+            "get",
+            "subclass"
+          ],
+          "pitch",
+          "#4c9a2a",
+          "playground",
+          "#4c9a2a",
+          "garden",
+          "#4c9a2a",
+          "bench",
+          "#734a08",
+          "telephone",
+          "#734a08",
+          "entrance",
+          "#734a08",
+          "gate",
+          "#734a08",
+          [
+            "match",
+            [
+              "get",
+              "class"
+            ],
+            "park",
+            "#4c9a2a",
+            "golf",
+            "#4c9a2a",
+            "office",
+            "#734a08",
+            "#734a08"
+          ]
+        ],
+        "icon-halo-color": "#ffffff",
+        "icon-halo-width": 0.6
+      }
+    },
+    {
+      "id": "poi-icons-priority",
+      "type": "symbol",
+      "source": "omt",
+      "source-layer": "poi",
+      "minzoom": 12,
+      "filter": [
+        "any",
+        [
+          "in",
+          [
+            "get",
+            "subclass"
+          ],
+          [
+            "literal",
+            [
+              "playground",
+              "recycling",
+              "waste_basket",
+              "post_box",
+              "bicycle_parking",
+              "parking",
+              "toilets",
+              "drinking_water",
+              "shelter",
+              "picnic_site",
+              "picnic_table",
+              "camp_site",
+              "campsite",
+              "dog_park",
+              "fitness_station",
+              "fitness_centre"
+            ]
+          ]
+        ],
+        [
+          "in",
+          [
+            "get",
+            "class"
+          ],
+          [
+            "literal",
+            [
+              "shop",
+              "office",
+              "town_hall",
+              "fast_food",
+              "bus",
+              "railway",
+              "aerialway",
+              "laundry",
+              "grocery",
+              "library",
+              "college",
+              "lodging",
+              "ice_cream",
+              "post",
+              "cafe",
+              "school",
+              "alcohol_shop",
+              "bar",
+              "harbor",
+              "car",
+              "hospital",
+              "cemetery",
+              "attraction",
+              "beer",
+              "music",
+              "stadium",
+              "art_gallery",
+              "clothing_store",
+              "swimming",
+              "castle",
+              "atm",
+              "fuel"
+            ]
+          ]
+        ]
+      ],
+      "layout": {
+        "icon-image": [
+          "match",
+          [
+            "get",
+            "subclass"
+          ],
+          "playground",
+          "omt-playground",
+          "recycling",
+          "omt-recycling",
+          "waste_basket",
+          "omt-waste-basket",
+          "post_box",
+          "omt-post",
+          "bicycle_parking",
+          "omt-bicycle",
+          "parking",
+          "omt-parking",
+          "toilets",
+          "omt-toilet",
+          "drinking_water",
+          "omt-drinking-water",
+          "shelter",
+          "omt-shelter",
+          "picnic_site",
+          "omt-picnic-site",
+          "picnic_table",
+          "omt-picnic-site",
+          "camp_site",
+          "omt-campsite",
+          "campsite",
+          "omt-campsite",
+          "dog_park",
+          "omt-dog-park",
+          "fitness_station",
+          "omt-fitness",
+          "fitness_centre",
+          "omt-fitness",
+          [
+            "match",
+            [
+              "get",
+              "class"
+            ],
+            "shop",
+            "omt-shop",
+            "office",
+            "omt-office",
+            "town_hall",
+            "omt-town-hall",
+            "fast_food",
+            "omt-fast-food",
+            "bus",
+            "omt-bus",
+            "railway",
+            "omt-rail",
+            "aerialway",
+            "omt-aerialway",
+            "laundry",
+            "omt-laundry",
+            "grocery",
+            "omt-grocery",
+            "library",
+            "omt-library",
+            "college",
+            "omt-college",
+            "lodging",
+            "omt-lodging",
+            "ice_cream",
+            "omt-cafe",
+            "post",
+            "omt-post",
+            "cafe",
+            "omt-cafe",
+            "school",
+            "omt-school",
+            "alcohol_shop",
+            "omt-alcohol-shop",
+            "bar",
+            "omt-bar",
+            "harbor",
+            "omt-harbor",
+            "car",
+            "omt-car",
+            "hospital",
+            "omt-hospital",
+            "cemetery",
+            "omt-cemetery",
+            "attraction",
+            "omt-attraction",
+            "beer",
+            "omt-beer",
+            "music",
+            "omt-music",
+            "stadium",
+            "omt-stadium",
+            "art_gallery",
+            "omt-art-gallery",
+            "clothing_store",
+            "omt-shop",
+            "swimming",
+            "omt-swimming",
+            "castle",
+            "omt-castle",
+            "atm",
+            "omt-bank",
+            "fuel",
+            "omt-fuel",
+            "omt-circle"
+          ]
+        ],
+        "icon-size": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          12,
+          0.22,
+          13,
+          0.32,
+          16,
+          0.72,
+          18,
+          0.86
+        ],
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true,
+        "icon-padding": 2
+      },
+      "paint": {
+        "icon-color": [
+          "match",
+          [
+            "get",
+            "subclass"
+          ],
+          "waste_basket",
+          "#6c6c6c",
+          "post_box",
+          "#d22630",
+          "bicycle_parking",
+          "#0092da",
+          "parking",
+          "#0066ff",
+          "toilets",
+          "#734a08",
+          [
+            "match",
+            [
+              "get",
+              "class"
+            ],
+            "shop",
+            "#ac39ac",
+            "clothing_store",
+            "#ac39ac",
+            "grocery",
+            "#ac39ac",
+            "alcohol_shop",
+            "#ac39ac",
+            "laundry",
+            "#ac39ac",
+            "cafe",
+            "#734a08",
+            "fast_food",
+            "#734a08",
+            "ice_cream",
+            "#734a08",
+            "bar",
+            "#734a08",
+            "beer",
+            "#734a08",
+            "restaurant",
+            "#734a08",
+            "hospital",
+            "#da0092",
+            "atm",
+            "#734a08",
+            "bank",
+            "#734a08",
+            "post",
+            "#d22630",
+            "fuel",
+            "#734a08",
+            "car",
+            "#734a08",
+            "school",
+            "#5d7f2f",
+            "college",
+            "#5d7f2f",
+            "library",
+            "#5d7f2f",
+            "office",
+            "#734a08",
+            "town_hall",
+            "#734a08",
+            "entrance",
+            "#734a08",
+            "bus",
+            "#0092da",
+            "railway",
+            "#0092da",
+            "aerialway",
+            "#0092da",
+            "harbor",
+            "#0092da",
+            "park",
+            "#4c9a2a",
+            "golf",
+            "#4c9a2a",
+            "swimming",
+            "#0092da",
+            "cemetery",
+            "#5d7f2f",
+            "campsite",
+            "#4c9a2a",
+            "lodging",
+            "#0092da",
+            "attraction",
+            "#0092da",
+            "art_gallery",
+            "#0092da",
+            "music",
+            "#0092da",
+            "stadium",
+            "#0092da",
+            "castle",
+            "#734a08",
+            "#734a08"
+          ]
+        ],
+        "icon-halo-color": "#ffffff",
+        "icon-halo-width": 1.2
+      }
+    },
+    {
+      "id": "mountain-peak-points",
+      "type": "symbol",
+      "source": "omt",
+      "source-layer": "mountain_peak",
+      "minzoom": 10,
+      "layout": {
+        "icon-image": "omt-mountain",
+        "icon-size": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          10,
+          0.36,
+          16,
+          0.72
+        ],
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true
+      },
+      "paint": {
+        "icon-color": [
+          "match",
+          [
+            "get",
+            "class"
+          ],
+          [
+            "peak",
+            "volcano",
+            "saddle",
+            "ridge",
+            "cliff",
+            "arete"
+          ],
+          "#4c9a2a",
+          "#4c9a2a"
+        ],
+        "icon-halo-color": "#ffffff",
+        "icon-halo-width": 1.3
+      }
+    },
+    {
+      "id": "aerodrome-points",
+      "type": "symbol",
+      "source": "omt",
+      "source-layer": "aerodrome_label",
+      "minzoom": 8,
+      "layout": {
+        "icon-image": "omt-airport",
+        "icon-size": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          8,
+          0.375,
+          16,
+          0.75
+        ],
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true
+      },
+      "paint": {
+        "icon-color": "#0092da",
+        "icon-halo-color": "#ffffff",
+        "icon-halo-width": 1.4
+      }
+    },
+    {
+      "id": "water-name-points",
+      "type": "symbol",
+      "source": "omt",
+      "source-layer": "water_name",
+      "minzoom": 12,
+      "layout": {
+        "icon-image": "omt-water",
+        "icon-size": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          12,
+          0.3,
+          16,
+          0.6
+        ],
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true
+      },
+      "paint": {
+        "icon-color": "#0092da",
+        "icon-halo-color": "#ffffff",
+        "icon-halo-width": 1.2
+      }
+    },
+    {
+      "id": "transportation-name-points",
+      "type": "symbol",
+      "source": "omt",
+      "source-layer": "transportation_name",
+      "minzoom": 12,
+      "layout": {
+        "icon-image": [
+          "match",
+          [
+            "get",
+            "subclass"
+          ],
+          "cycleway",
+          "omt-bicycle",
+          [
+            "match",
+            [
+              "get",
+              "class"
+            ],
+            "rail",
+            "omt-rail",
+            "transit",
+            "omt-rail",
+            "ferry",
+            "omt-harbor",
+            "omt-circle"
+          ]
+        ],
+        "icon-size": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          12,
+          0.28,
+          16,
+          0.56
+        ],
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true
+      },
+      "paint": {
+        "icon-color": [
+          "match",
+          [
+            "get",
+            "subclass"
+          ],
+          "cycleway",
+          "#0092da",
+          [
+            "match",
+            [
+              "get",
+              "class"
+            ],
+            "rail",
+            "#0092da",
+            "transit",
+            "#0092da",
+            "ferry",
+            "#0092da",
+            "#0092da"
+          ]
+        ],
+        "icon-halo-color": "#ffffff",
+        "icon-halo-width": 1.2
+      },
+      "filter": [
+        "any",
+        [
+          "==",
+          [
+            "get",
+            "subclass"
+          ],
+          "cycleway"
+        ],
+        [
+          "in",
+          [
+            "get",
+            "class"
+          ],
+          [
+            "literal",
+            [
+              "rail",
+              "transit",
+              "ferry"
+            ]
+          ]
+        ]
+      ]
+    },
+    {
+      "id": "transportation-labels",
+      "type": "symbol",
+      "source": "omt",
+      "source-layer": "transportation_name",
+      "minzoom": 12,
+      "layout": {
+        "symbol-placement": "line",
+        "text-field": [
+          "coalesce",
+          [
+            "get",
+            "name_en"
+          ],
+          [
+            "get",
+            "name"
+          ],
+          [
+            "get",
+            "ref"
+          ]
+        ],
+        "text-font": [
+          "Open Sans Semibold"
+        ],
+        "text-size": 11
+      },
+      "paint": {
+        "text-color": "#5f5b54",
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1.2
+      }
+    },
+    {
+      "id": "housenumber-labels",
+      "type": "symbol",
+      "source": "omt",
+      "source-layer": "housenumber",
+      "minzoom": 15,
+      "layout": {
+        "text-field": [
+          "get",
+          "housenumber"
+        ],
+        "text-font": [
+          "Open Sans Semibold"
+        ],
+        "text-size": 10
+      },
+      "paint": {
+        "text-color": "#6856c8",
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1
+      }
+    },
+    {
+      "id": "poi-labels",
+      "type": "symbol",
+      "source": "omt",
+      "source-layer": "poi",
+      "minzoom": 15,
+      "layout": {
+        "text-field": [
+          "coalesce",
+          [
+            "get",
+            "name_en"
+          ],
+          [
+            "get",
+            "name"
+          ],
+          [
+            "get",
+            "class"
+          ]
+        ],
+        "text-font": [
+          "Open Sans Semibold"
+        ],
+        "text-size": 11,
+        "text-offset": [
+          0,
+          0.8
+        ],
+        "text-anchor": "top"
+      },
+      "paint": {
+        "text-color": "#3b3b35",
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1.2
+      }
+    },
+    {
+      "id": "place-labels",
+      "type": "symbol",
+      "source": "omt",
+      "source-layer": "place",
+      "layout": {
+        "text-field": [
+          "coalesce",
+          [
+            "get",
+            "name_en"
+          ],
+          [
+            "get",
+            "name"
+          ]
+        ],
+        "text-font": [
+          "Open Sans Semibold"
+        ],
+        "text-size": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          4,
+          11,
+          10,
+          15,
+          15,
+          18
+        ]
+      },
+      "paint": {
+        "text-color": "#423f39",
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1.4
+      }
+    }
+  ],
+  "id": "omt-osm-us"
+}
