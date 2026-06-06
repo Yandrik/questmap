@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "dev.questmap" "\0"
-            VALUE "FileDescription", "questmap_app" "\0"
+            VALUE "CompanyName", "dev.meander" "\0"
+            VALUE "FileDescription", "meander" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "questmap_app" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 dev.questmap. All rights reserved." "\0"
-            VALUE "OriginalFilename", "questmap_app.exe" "\0"
-            VALUE "ProductName", "questmap_app" "\0"
+            VALUE "InternalName", "meander" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 dev.meander. All rights reserved." "\0"
+            VALUE "OriginalFilename", "meander.exe" "\0"
+            VALUE "ProductName", "meander" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

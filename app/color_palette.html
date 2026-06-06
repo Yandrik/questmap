@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Meander Color Palette</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --fg: #cad2c5;
+      --bg: #2f3e46;
+      --panel: #354f52;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--fg);
+      background: linear-gradient(135deg, #353535, #2f3e46 45%, #354f52);
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    main {
+      width: min(760px, 100%);
+    }
+
+    h1 {
+      margin: 0 0 18px;
+      font-size: clamp(1.5rem, 4vw, 2.4rem);
+      font-weight: 700;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+
+    .swatch {
+      min-height: 96px;
+      border-radius: 8px;
+      display: flex;
+      align-items: end;
+      padding: 10px;
+      box-shadow: 0 10px 24px rgb(0 0 0 / 0.22);
+    }
+
+    .label {
+      padding: 4px 6px;
+      border-radius: 4px;
+      color: #f7fff0;
+      background: rgb(0 0 0 / 0.38);
+      font: 600 0.82rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 1rem;
+      font-weight: 650;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Meander Color Palette</h1>
+
+    <h2>Primary</h2>
+    <section class="grid" aria-label="Primary palette">
+      <div class="swatch" style="background:#d9ed92"><span class="label">#d9ed92</span></div>
+      <div class="swatch" style="background:#b5e48c"><span class="label">#b5e48c</span></div>
+      <div class="swatch" style="background:#99d98c"><span class="label">#99d98c</span></div>
+      <div class="swatch" style="background:#76c893"><span class="label">#76c893</span></div>
+      <div class="swatch" style="background:#52b69a"><span class="label">#52b69a</span></div>
+      <div class="swatch" style="background:#34a0a4"><span class="label">#34a0a4</span></div>
+      <div class="swatch" style="background:#168aad"><span class="label">#168aad</span></div>
+      <div class="swatch" style="background:#1a759f"><span class="label">#1a759f</span></div>
+      <div class="swatch" style="background:#1e6091"><span class="label">#1e6091</span></div>
+      <div class="swatch" style="background:#184e77"><span class="label">#184e77</span></div>
+    </section>
+
+    <h2>Dark Backgrounds</h2>
+    <section class="grid" aria-label="Dark backgrounds">
+      <div class="swatch" style="background:#353535"><span class="label">#353535</span></div>
+      <div class="swatch" style="background:#2f3e46"><span class="label">#2f3e46</span></div>
+      <div class="swatch" style="background:#354f52"><span class="label">#354f52</span></div>
+      <div class="swatch" style="background:#52796f"><span class="label">#52796f</span></div>
+    </section>
+  </main>
+</body>
+</html>
