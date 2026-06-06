@@ -38,6 +38,7 @@ dependencies:
   iconify_flutter: ^0.0.7
   maplibre_gl:
     path: /home/yannik/Documents/Codex/2026-06-05/maplibre-flutter-maplibre-gl-git-https/maplibre_gl
+  dio: ^5.9.2
 
 dependency_overrides:
   maplibre_gl_platform_interface:

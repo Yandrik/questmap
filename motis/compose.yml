@@ -1,0 +1,29 @@
+services:
+  motis:
+    image: questmap-motis:${MOTIS_VERSION:-2.10.2}
+    build:
+      context: .
+      args:
+        MOTIS_VERSION: ${MOTIS_RELEASE:-v2.10.2}
+        TARGETARCH: ${MOTIS_TARGETARCH:-amd64}
+    command: ["/motis", "server", "/data"]
+    ports:
+      - "${MOTIS_PORT:-8080}:8080"
+    volumes:
+      - ./data:/data:ro
+    restart: unless-stopped
+
+  import:
+    image: questmap-motis:${MOTIS_VERSION:-2.10.2}
+    build:
+      context: .
+      args:
+        MOTIS_VERSION: ${MOTIS_RELEASE:-v2.10.2}
+        TARGETARCH: ${MOTIS_TARGETARCH:-amd64}
+    profiles: ["import"]
+    entrypoint: ["/motis"]
+    command: ["import"]
+    working_dir: /data
+    user: root
+    volumes:
+      - ./data:/data

@@ -8,10 +8,14 @@ services:
       SURREALDB_DATABASE: questmap
       SURREALDB_USERNAME: root
       SURREALDB_PASSWORD: root
+      VALHALLA_URL: http://valhalla:8002
+      MOTIS_URL: http://motis:8080
     ports:
       - "8000:8000"
     depends_on:
       - surrealdb
+      - valhalla
+      - motis
 
   surrealdb:
     image: surrealdb/surrealdb:latest-dev
@@ -26,6 +30,34 @@ services:
       - "8001:8000"
     volumes:
       - surrealdb-data:/data
+
+  valhalla:
+    image: ghcr.io/valhalla/valhalla-scripted:latest
+    environment:
+      tile_urls: ${VALHALLA_TILE_URLS:-}
+      server_threads: ${VALHALLA_SERVER_THREADS:-2}
+      use_tiles_ignore_pbf: ${VALHALLA_USE_TILES_IGNORE_PBF:-True}
+      build_elevation: ${VALHALLA_BUILD_ELEVATION:-False}
+      build_admins: ${VALHALLA_BUILD_ADMINS:-True}
+      build_time_zones: ${VALHALLA_BUILD_TIME_ZONES:-True}
+      build_tar: ${VALHALLA_BUILD_TAR:-True}
+      serve_tiles: "True"
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./motis/data/valhalla:/custom_files
+
+  motis:
+    build:
+      context: ./motis
+      args:
+        MOTIS_VERSION: ${MOTIS_RELEASE:-v2.10.2}
+        TARGETARCH: ${MOTIS_TARGETARCH:-amd64}
+    command: ["/motis", "server", "/data"]
+    ports:
+      - "${MOTIS_PORT:-8080}:8080"
+    volumes:
+      - ./motis/data:/data:ro
 
 volumes:
   surrealdb-data:

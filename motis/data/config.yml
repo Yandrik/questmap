@@ -1,0 +1,33 @@
+server:
+  host: 0.0.0.0
+  port: 8080
+  data_attribution_link: https://your-app.example/attribution
+
+osm: by-bw.osm.pbf
+
+timetable:
+  first_day: TODAY
+  num_days: 90
+  railviz: false
+  with_shapes: true
+  adjust_footpaths: true
+  datasets:
+    de:
+      path: gtfs-de.zip
+      rt:
+        - url: https://realtime.gtfs.de/realtime-free.pb
+          protocol: gtfsrt
+
+street_routing: true
+osr_footpath: true
+geocoding: true
+reverse_geocoding: false
+
+limits:
+  plan_max_results: 64
+  routing_max_timeout_seconds: 30
+  street_routing_max_prepost_transit_seconds: 1800
+  street_routing_max_direct_seconds: 7200
+
+logging:
+  log_level: info
