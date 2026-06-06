@@ -13,6 +13,8 @@ import '../../../app/app_config.dart';
 import '../../location/manager/location_manager.dart';
 import '../../routing/manager/routing_manager.dart';
 import '../../routing/model/direct_navigation_request.dart';
+import '../../trip_planning/manager/trip_draft_manager.dart';
+import '../../trip_planning/widgets/trip_composer_panel.dart';
 import '../manager/map_selection_manager.dart';
 import '../model/rendered_map_feature.dart';
 import '../model/selected_map_target.dart';
@@ -43,6 +45,7 @@ class _MapShellState extends State<MapShell> {
   final _routeOverlay = MapRouteOverlay();
 
   MapLibreMapController? _controller;
+  bool _isTripComposerOpen = false;
 
   @override
   void initState() {
@@ -258,12 +261,23 @@ class _MapShellState extends State<MapShell> {
     di<RoutingManager>().stopNavigation();
   }
 
-  void _openTripPlannerPlaceholder() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Trip planner is coming in the next phase.'),
-      ),
-    );
+  Future<void> _openTripPlanner() async {
+    final target = di<MapSelectionManager>().selectedTarget;
+    if (target == null) return;
+    final start =
+        await _currentStartLocation() ??
+        _toGeoCoordinate(target.coordinates, target.name);
+    await di<TripDraftManager>().ensureDraft(startLocation: start);
+    if (!mounted) return;
+    setState(() {
+      _isTripComposerOpen = true;
+    });
+  }
+
+  void _closeTripPlanner() {
+    setState(() {
+      _isTripComposerOpen = false;
+    });
   }
 
   @override
@@ -354,20 +368,26 @@ class _MapShellState extends State<MapShell> {
               right: 12,
               bottom: 12,
               width: 360,
-              child: TargetDetailsPanel(
-                selectedTarget: selectionManager.selectedTarget,
-                isQuerying: selectionManager.isQuerying,
-                message: selectionManager.message ?? locationManager.message,
-                routeCandidates: routingManager.candidates,
-                selectedRoute: routingManager.selectedCandidate,
-                isRouting: isRouting,
-                isNavigationActive: routingManager.isNavigationActive,
-                onNavigate: _navigateToSelectedTarget,
-                onTrip: _openTripPlannerPlaceholder,
-                onSelectRoute: _selectRoute,
-                onStartNavigation: _startNavigation,
-                onStopNavigation: _stopNavigation,
-              ),
+              child: _isTripComposerOpen
+                  ? TripComposerPanel(
+                      selectedTarget: selectionManager.selectedTarget,
+                      onClose: _closeTripPlanner,
+                    )
+                  : TargetDetailsPanel(
+                      selectedTarget: selectionManager.selectedTarget,
+                      isQuerying: selectionManager.isQuerying,
+                      message:
+                          selectionManager.message ?? locationManager.message,
+                      routeCandidates: routingManager.candidates,
+                      selectedRoute: routingManager.selectedCandidate,
+                      isRouting: isRouting,
+                      isNavigationActive: routingManager.isNavigationActive,
+                      onNavigate: _navigateToSelectedTarget,
+                      onTrip: _openTripPlanner,
+                      onSelectRoute: _selectRoute,
+                      onStartNavigation: _startNavigation,
+                      onStopNavigation: _stopNavigation,
+                    ),
             )
           else
             Positioned.fill(
@@ -375,27 +395,36 @@ class _MapShellState extends State<MapShell> {
                 top: false,
                 child: DraggableScrollableSheet(
                   minChildSize: 0.18,
-                  initialChildSize: 0.26,
-                  maxChildSize: 0.5,
+                  initialChildSize: _isTripComposerOpen ? 0.52 : 0.26,
+                  maxChildSize: _isTripComposerOpen ? 0.82 : 0.5,
                   snap: true,
-                  snapSizes: const [0.26, 0.5],
-                  builder: (context, scrollController) => TargetDetailsPanel(
-                    selectedTarget: selectionManager.selectedTarget,
-                    isQuerying: selectionManager.isQuerying,
-                    message:
-                        selectionManager.message ?? locationManager.message,
-                    routeCandidates: routingManager.candidates,
-                    selectedRoute: routingManager.selectedCandidate,
-                    isRouting: isRouting,
-                    isNavigationActive: routingManager.isNavigationActive,
-                    onNavigate: _navigateToSelectedTarget,
-                    onTrip: _openTripPlannerPlaceholder,
-                    onSelectRoute: _selectRoute,
-                    onStartNavigation: _startNavigation,
-                    onStopNavigation: _stopNavigation,
-                    compact: true,
-                    scrollController: scrollController,
-                  ),
+                  snapSizes: _isTripComposerOpen
+                      ? const [0.52, 0.82]
+                      : const [0.26, 0.5],
+                  builder: (context, scrollController) => _isTripComposerOpen
+                      ? TripComposerPanel(
+                          selectedTarget: selectionManager.selectedTarget,
+                          onClose: _closeTripPlanner,
+                          compact: true,
+                        )
+                      : TargetDetailsPanel(
+                          selectedTarget: selectionManager.selectedTarget,
+                          isQuerying: selectionManager.isQuerying,
+                          message:
+                              selectionManager.message ??
+                              locationManager.message,
+                          routeCandidates: routingManager.candidates,
+                          selectedRoute: routingManager.selectedCandidate,
+                          isRouting: isRouting,
+                          isNavigationActive: routingManager.isNavigationActive,
+                          onNavigate: _navigateToSelectedTarget,
+                          onTrip: _openTripPlanner,
+                          onSelectRoute: _selectRoute,
+                          onStartNavigation: _startNavigation,
+                          onStopNavigation: _stopNavigation,
+                          compact: true,
+                          scrollController: scrollController,
+                        ),
                 ),
               ),
             ),

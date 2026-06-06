@@ -10,6 +10,7 @@ import 'features/map/manager/map_selection_manager.dart';
 import 'features/routing/manager/routing_manager.dart';
 import 'features/routing/services/routing_api_service.dart';
 import 'features/transit/services/transit_api_service.dart';
+import 'features/trip_planning/manager/trip_draft_manager.dart';
 import 'features/trip_planning/services/trip_planning_api_service.dart';
 
 void configureDependencies() {
@@ -49,6 +50,10 @@ void configureDependencies() {
   );
   di.registerLazySingleton<RoutingManager>(
     () => RoutingManager(di<RoutingApiService>(), di<TransitApiService>()),
+    dispose: (manager) => manager.dispose(),
+  );
+  di.registerLazySingleton<TripDraftManager>(
+    () => TripDraftManager(di<LocalPersistenceService>()),
     dispose: (manager) => manager.dispose(),
   );
 }
