@@ -1,0 +1,10 @@
+[project]
+name = "files-mentioned-by-the-user-tuebingen"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "osmium>=4.3.1",
+    "surrealdb>=2.0.0",
+]
