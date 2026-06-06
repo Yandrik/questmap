@@ -7,6 +7,7 @@ import '../../../_shared/models/transport_mode.dart';
 import '../../../_shared/services/local_persistence_service.dart';
 import '../model/itinerary_step_draft.dart';
 import '../model/location_constraint.dart';
+import '../model/pending_trip_location_pick.dart';
 import '../model/time_constraint.dart';
 import '../model/trip_draft.dart';
 
@@ -19,9 +20,11 @@ class TripDraftManager extends ChangeNotifier {
   final LocalPersistenceService _persistenceService;
 
   TripDraft? _draft;
+  PendingTripLocationPick? _pendingLocationPick;
   bool _isLoaded = false;
 
   TripDraft? get draft => _draft;
+  PendingTripLocationPick? get pendingLocationPick => _pendingLocationPick;
   bool get isLoaded => _isLoaded;
   bool get hasSteps => _draft?.steps.isNotEmpty ?? false;
 
@@ -85,6 +88,24 @@ class TripDraftManager extends ChangeNotifier {
     int durationMinutes = 60,
   }) {
     final draft = _requireDraft();
+    insertStep(
+      index: draft.steps.length,
+      type: type,
+      details: details,
+      durationMinutes: durationMinutes,
+      location: location,
+    );
+  }
+
+  void insertStep({
+    required int index,
+    required ItineraryStepType type,
+    required String details,
+    required LocationConstraint location,
+    int durationMinutes = 60,
+  }) {
+    final draft = _requireDraft();
+    final insertIndex = _clampInsertIndex(index, draft.steps.length);
     final step = ItineraryStepDraft.create(
       id: 'step-${DateTime.now().microsecondsSinceEpoch}',
       type: type,
@@ -93,10 +114,82 @@ class TripDraftManager extends ChangeNotifier {
       location: location,
     );
     _draft = draft.copyWith(
-      steps: [...draft.steps, step],
+      steps: [
+        ...draft.steps.take(insertIndex),
+        step,
+        ...draft.steps.skip(insertIndex),
+      ],
       updatedAt: DateTime.now().toUtc(),
     );
     _changed();
+  }
+
+  void beginLocationPick({
+    required int index,
+    required ItineraryStepType type,
+    required String details,
+    required int durationMinutes,
+    required TripLocationPickKind kind,
+    GeoCoordinate? areaCenter,
+    double radiusMeters = 500,
+  }) {
+    final draft = _requireDraft();
+    _pendingLocationPick = PendingTripLocationPick(
+      type: type,
+      details: details.trim(),
+      durationMinutes: durationMinutes,
+      insertIndex: _clampInsertIndex(index, draft.steps.length),
+      kind: kind,
+      areaCenter: areaCenter,
+      radiusMeters: radiusMeters,
+    );
+    notifyListeners();
+  }
+
+  void updatePendingAreaCenter(GeoCoordinate center) {
+    final pending = _requirePendingLocationPick();
+    if (!pending.kind.usesArea) {
+      throw StateError('Only area location picks can update an area center.');
+    }
+    _pendingLocationPick = pending.copyWith(areaCenter: center);
+    notifyListeners();
+  }
+
+  void updatePendingAreaRadius(double radiusMeters) {
+    final pending = _requirePendingLocationPick();
+    _pendingLocationPick = pending.copyWith(radiusMeters: radiusMeters);
+    notifyListeners();
+  }
+
+  void completePointPick(GeoCoordinate point) {
+    final pending = _requirePendingLocationPick();
+    final location = switch (pending.kind) {
+      TripLocationPickKind.exactPoint => LocationConstraint.exactPoint(point),
+      TripLocationPickKind.aroundPoint => LocationConstraint.aroundPoint(point),
+      TripLocationPickKind.areaCircle => throw StateError(
+        'Area location picks require completeAreaPick.',
+      ),
+    };
+    _completePendingPick(location);
+  }
+
+  void completeAreaPick({
+    required GeoCoordinate center,
+    required double radiusMeters,
+  }) {
+    final pending = _requirePendingLocationPick();
+    if (!pending.kind.usesArea) {
+      throw StateError('Point location picks require completePointPick.');
+    }
+    _completePendingPick(
+      LocationConstraint.areaCircle(center: center, radiusMeters: radiusMeters),
+    );
+  }
+
+  void cancelLocationPick() {
+    if (_pendingLocationPick == null) return;
+    _pendingLocationPick = null;
+    notifyListeners();
   }
 
   void updateStep(ItineraryStepDraft step) {
@@ -130,6 +223,40 @@ class TripDraftManager extends ChangeNotifier {
     return draft;
   }
 
+  PendingTripLocationPick _requirePendingLocationPick() {
+    final pending = _pendingLocationPick;
+    if (pending == null) {
+      throw StateError('No trip location pick is pending.');
+    }
+    return pending;
+  }
+
+  void _completePendingPick(LocationConstraint location) {
+    final pending = _requirePendingLocationPick();
+    final draft = _requireDraft();
+    final insertIndex = _clampInsertIndex(
+      pending.insertIndex,
+      draft.steps.length,
+    );
+    final step = ItineraryStepDraft.create(
+      id: 'step-${DateTime.now().microsecondsSinceEpoch}',
+      type: pending.type,
+      details: pending.details,
+      time: TimeConstraint(durationMinutes: pending.durationMinutes),
+      location: location,
+    );
+    _draft = draft.copyWith(
+      steps: [
+        ...draft.steps.take(insertIndex),
+        step,
+        ...draft.steps.skip(insertIndex),
+      ],
+      updatedAt: DateTime.now().toUtc(),
+    );
+    _pendingLocationPick = null;
+    _changed();
+  }
+
   void _changed() {
     notifyListeners();
     unawaited(_save());
@@ -143,5 +270,11 @@ class TripDraftManager extends ChangeNotifier {
       id: _activeDraftId,
       payload: draft.toJson(),
     );
+  }
+
+  static int _clampInsertIndex(int index, int length) {
+    if (index < 0) return 0;
+    if (index > length) return length;
+    return index;
   }
 }

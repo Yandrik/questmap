@@ -4,6 +4,7 @@ import 'package:meander/_shared/models/transport_mode.dart';
 import 'package:meander/_shared/services/api_client.dart';
 import 'package:meander/features/trip_planning/model/itinerary_step_draft.dart';
 import 'package:meander/features/trip_planning/model/location_constraint.dart';
+import 'package:meander/features/trip_planning/model/pending_trip_location_pick.dart';
 import 'package:meander/features/trip_planning/model/time_constraint.dart';
 import 'package:meander/features/trip_planning/model/trip_planning_session.dart';
 
@@ -67,6 +68,25 @@ void main() {
         },
       ],
     });
+  });
+
+  test('keeps pending trip location pick as transient app state', () {
+    const pending = PendingTripLocationPick(
+      type: ItineraryStepType.shop,
+      details: 'clothes',
+      durationMinutes: 90,
+      insertIndex: 1,
+      kind: TripLocationPickKind.areaCircle,
+    );
+
+    final updated = pending.copyWith(
+      areaCenter: const GeoCoordinate(lat: 48.4, lon: 9.99),
+      radiusMeters: 800,
+    );
+
+    expect(updated.kind.usesArea, isTrue);
+    expect(updated.areaCenter!.lon, 9.99);
+    expect(updated.radiusMeters, 800);
   });
 
   test('parses SSE question event', () {

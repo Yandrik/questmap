@@ -3,12 +3,14 @@ import 'package:watch_it/watch_it.dart';
 
 import '../../../_shared/models/geo_coordinate.dart';
 import '../../../_shared/models/transport_mode.dart';
+import '../../map/manager/map_interaction_manager.dart';
 import '../../map/model/selected_map_target.dart';
 import '../manager/trip_agent_manager.dart';
 import '../manager/trip_draft_manager.dart';
 import '../manager/trip_plan_manager.dart';
 import '../model/itinerary_step_draft.dart';
 import '../model/location_constraint.dart';
+import '../model/pending_trip_location_pick.dart';
 import '../model/trip_plan.dart';
 import '../model/trip_draft.dart';
 
@@ -17,12 +19,14 @@ class TripComposerPanel extends WatchingWidget {
     required this.onClose,
     this.selectedTarget,
     this.compact = false,
+    this.scrollController,
     super.key,
   });
 
   final VoidCallback onClose;
   final SelectedMapTarget? selectedTarget;
   final bool compact;
+  final ScrollController? scrollController;
 
   @override
   Widget build(BuildContext context) {
@@ -58,6 +62,7 @@ class TripComposerPanel extends WatchingWidget {
                                 onAdd: () => _showActivityDialog(context),
                               )
                             : ListView(
+                                controller: scrollController,
                                 padding: EdgeInsets.zero,
                                 children: [
                                   for (
@@ -68,13 +73,15 @@ class TripComposerPanel extends WatchingWidget {
                                     _ItineraryStepCard(
                                       step: draft.steps[index],
                                     ),
-                                    if (_hasLargeGapAfter(draft.steps, index))
-                                      Center(
-                                        child: IconButton.filledTonal(
-                                          tooltip: 'Add activity',
-                                          onPressed: () =>
-                                              _showActivityDialog(context),
-                                          icon: const Icon(Icons.add),
+                                    if (index < draft.steps.length - 1)
+                                      _InsertStepButton(
+                                        highlighted: _hasLargeGapAfter(
+                                          draft.steps,
+                                          index,
+                                        ),
+                                        onPressed: () => _showActivityDialog(
+                                          context,
+                                          insertIndex: index + 1,
                                         ),
                                       ),
                                     const SizedBox(height: 10),
@@ -90,7 +97,10 @@ class TripComposerPanel extends WatchingWidget {
                         children: [
                           Expanded(
                             child: FilledButton.icon(
-                              onPressed: () => _showActivityDialog(context),
+                              onPressed: () => _showActivityDialog(
+                                context,
+                                insertIndex: draft.steps.length,
+                              ),
                               icon: const Icon(Icons.add),
                               label: const Text('Add activity'),
                             ),
@@ -116,18 +126,45 @@ class TripComposerPanel extends WatchingWidget {
     );
   }
 
-  Future<void> _showActivityDialog(BuildContext context) async {
+  Future<void> _showActivityDialog(
+    BuildContext context, {
+    int? insertIndex,
+  }) async {
+    final manager = di<TripDraftManager>();
+    final targetIndex = insertIndex ?? manager.draft?.steps.length ?? 0;
     final result = await showDialog<_ActivityDialogResult>(
       context: context,
       builder: (context) =>
           _ActivityPickerDialog(selectedTarget: selectedTarget),
     );
     if (result == null || !context.mounted) return;
-    di<TripDraftManager>().addStep(
+    final location = result.location;
+    if (location != null) {
+      manager.insertStep(
+        index: targetIndex,
+        type: result.type,
+        details: result.details,
+        durationMinutes: result.durationMinutes,
+        location: location,
+      );
+      return;
+    }
+
+    final pickKind = result.pickKind;
+    if (pickKind == null) return;
+    manager.beginLocationPick(
+      index: targetIndex,
       type: result.type,
       details: result.details,
       durationMinutes: result.durationMinutes,
-      location: result.location,
+      kind: pickKind,
+      areaCenter: result.areaCenter,
+      radiusMeters: result.radiusMeters,
+    );
+    di<MapInteractionManager>().setMode(
+      pickKind.usesArea
+          ? MapInteractionMode.drawArea
+          : MapInteractionMode.selectPoint,
     );
   }
 
@@ -140,6 +177,39 @@ class TripComposerPanel extends WatchingWidget {
       Duration(minutes: steps[index].time.durationMinutes),
     );
     return nextStart.difference(currentEnd).inMinutes > 30;
+  }
+}
+
+class _InsertStepButton extends StatelessWidget {
+  const _InsertStepButton({required this.onPressed, required this.highlighted});
+
+  final VoidCallback onPressed;
+  final bool highlighted;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Center(
+        child: Tooltip(
+          message: 'Insert activity here',
+          child: IconButton(
+            style: IconButton.styleFrom(
+              backgroundColor: highlighted
+                  ? theme.colorScheme.primaryContainer
+                  : theme.colorScheme.surfaceContainerHighest,
+              foregroundColor: highlighted
+                  ? theme.colorScheme.onPrimaryContainer
+                  : theme.colorScheme.primary,
+              fixedSize: const Size.square(34),
+            ),
+            onPressed: onPressed,
+            icon: const Icon(Icons.add, size: 18),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -510,9 +580,12 @@ class _DurationMenu extends StatelessWidget {
       initialValue: durations.contains(step.time.durationMinutes)
           ? step.time.durationMinutes
           : 60,
+      isExpanded: true,
       decoration: const InputDecoration(
         isDense: true,
         prefixIcon: Icon(Icons.timer),
+        prefixIconConstraints: BoxConstraints(minWidth: 32, minHeight: 32),
+        contentPadding: EdgeInsetsDirectional.only(end: 8),
         border: OutlineInputBorder(),
       ),
       items: [
@@ -558,6 +631,8 @@ class _ActivityPickerDialogState extends State<_ActivityPickerDialog> {
   Widget build(BuildContext context) {
     final target = widget.selectedTarget;
     final hasTarget = target != null;
+    final canUseSelectedTarget =
+        hasTarget && _locationChoice != _LocationChoice.wherever;
 
     return AlertDialog(
       title: const Text('Add activity'),
@@ -586,12 +661,10 @@ class _ActivityPickerDialogState extends State<_ActivityPickerDialog> {
                 ChoiceChip(
                   label: const Text('Exact location'),
                   selected: _type == ItineraryStepType.exactLocation,
-                  onSelected: hasTarget
-                      ? (_) => setState(() {
-                          _type = ItineraryStepType.exactLocation;
-                          _locationChoice = _LocationChoice.exactSelected;
-                        })
-                      : null,
+                  onSelected: (_) => setState(() {
+                    _type = ItineraryStepType.exactLocation;
+                    _locationChoice = _LocationChoice.exactSelected;
+                  }),
                 ),
               ],
             ),
@@ -629,28 +702,26 @@ class _ActivityPickerDialogState extends State<_ActivityPickerDialog> {
             const SizedBox(height: 16),
             SegmentedButton<_LocationChoice>(
               segments: [
-                const ButtonSegment(
+                ButtonSegment(
                   value: _LocationChoice.wherever,
+                  enabled: _type != ItineraryStepType.exactLocation,
                   icon: Icon(Icons.travel_explore),
-                  label: Text('Wherever'),
+                  label: const Text('Wherever'),
                 ),
-                ButtonSegment(
+                const ButtonSegment(
                   value: _LocationChoice.aroundSelected,
-                  enabled: hasTarget,
-                  icon: const Icon(Icons.my_location),
-                  label: const Text('Around here'),
+                  icon: Icon(Icons.my_location),
+                  label: Text('Around here'),
                 ),
-                ButtonSegment(
+                const ButtonSegment(
                   value: _LocationChoice.areaSelected,
-                  enabled: hasTarget,
-                  icon: const Icon(Icons.radio_button_unchecked),
-                  label: const Text('Area'),
+                  icon: Icon(Icons.radio_button_unchecked),
+                  label: Text('Area'),
                 ),
-                ButtonSegment(
+                const ButtonSegment(
                   value: _LocationChoice.exactSelected,
-                  enabled: hasTarget,
-                  icon: const Icon(Icons.place),
-                  label: const Text('Exact'),
+                  icon: Icon(Icons.place),
+                  label: Text('Exact'),
                 ),
               ],
               selected: {_locationChoice},
@@ -666,39 +737,74 @@ class _ActivityPickerDialogState extends State<_ActivityPickerDialog> {
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cancel'),
         ),
+        if (canUseSelectedTarget)
+          TextButton(
+            onPressed: () =>
+                Navigator.of(context).pop(_selectedTargetResult(target)),
+            child: const Text('Use selected target'),
+          ),
         FilledButton(
-          onPressed: () {
-            final location = _locationConstraint();
-            if (location == null) return;
-            Navigator.of(context).pop(
-              _ActivityDialogResult(
-                type: _type,
-                details: _details,
-                durationMinutes: _durationMinutes,
-                location: location,
-              ),
-            );
-          },
-          child: const Text('Add'),
+          onPressed: () => Navigator.of(context).pop(_primaryResult()),
+          child: Text(
+            _locationChoice == _LocationChoice.wherever ? 'Add' : 'Pick on map',
+          ),
         ),
       ],
     );
   }
 
-  LocationConstraint? _locationConstraint() {
-    final target = widget.selectedTarget;
+  _ActivityDialogResult _primaryResult() {
     return switch (_locationChoice) {
-      _LocationChoice.wherever => LocationConstraint.wherever(),
-      _LocationChoice.aroundSelected when target != null =>
-        LocationConstraint.aroundPoint(target.toGeoCoordinate()),
-      _LocationChoice.areaSelected when target != null =>
-        LocationConstraint.areaCircle(
-          center: target.toGeoCoordinate(),
-          radiusMeters: 500,
-        ),
-      _LocationChoice.exactSelected when target != null =>
-        LocationConstraint.exactPoint(target.toGeoCoordinate()),
-      _ => null,
+      _LocationChoice.wherever => _ActivityDialogResult.insert(
+        type: _type,
+        details: _details,
+        durationMinutes: _durationMinutes,
+        location: LocationConstraint.wherever(),
+      ),
+      _LocationChoice.aroundSelected => _ActivityDialogResult.pickOnMap(
+        type: _type,
+        details: _details,
+        durationMinutes: _durationMinutes,
+        pickKind: TripLocationPickKind.aroundPoint,
+      ),
+      _LocationChoice.areaSelected => _ActivityDialogResult.pickOnMap(
+        type: _type,
+        details: _details,
+        durationMinutes: _durationMinutes,
+        pickKind: TripLocationPickKind.areaCircle,
+      ),
+      _LocationChoice.exactSelected => _ActivityDialogResult.pickOnMap(
+        type: _type,
+        details: _details,
+        durationMinutes: _durationMinutes,
+        pickKind: TripLocationPickKind.exactPoint,
+      ),
+    };
+  }
+
+  _ActivityDialogResult _selectedTargetResult(SelectedMapTarget target) {
+    final point = target.toGeoCoordinate();
+    return switch (_locationChoice) {
+      _LocationChoice.wherever => _primaryResult(),
+      _LocationChoice.aroundSelected => _ActivityDialogResult.insert(
+        type: _type,
+        details: _details,
+        durationMinutes: _durationMinutes,
+        location: LocationConstraint.aroundPoint(point),
+      ),
+      _LocationChoice.areaSelected => _ActivityDialogResult.pickOnMap(
+        type: _type,
+        details: _details,
+        durationMinutes: _durationMinutes,
+        pickKind: TripLocationPickKind.areaCircle,
+        areaCenter: point,
+      ),
+      _LocationChoice.exactSelected => _ActivityDialogResult.insert(
+        type: _type,
+        details: _details,
+        durationMinutes: _durationMinutes,
+        location: LocationConstraint.exactPoint(point),
+      ),
     };
   }
 }
@@ -706,17 +812,55 @@ class _ActivityPickerDialogState extends State<_ActivityPickerDialog> {
 enum _LocationChoice { wherever, aroundSelected, areaSelected, exactSelected }
 
 class _ActivityDialogResult {
-  const _ActivityDialogResult({
+  const _ActivityDialogResult._({
     required this.type,
     required this.details,
     required this.durationMinutes,
-    required this.location,
+    this.location,
+    this.pickKind,
+    this.areaCenter,
+    this.radiusMeters = 500,
   });
+
+  factory _ActivityDialogResult.insert({
+    required ItineraryStepType type,
+    required String details,
+    required int durationMinutes,
+    required LocationConstraint location,
+  }) {
+    return _ActivityDialogResult._(
+      type: type,
+      details: details,
+      durationMinutes: durationMinutes,
+      location: location,
+    );
+  }
+
+  factory _ActivityDialogResult.pickOnMap({
+    required ItineraryStepType type,
+    required String details,
+    required int durationMinutes,
+    required TripLocationPickKind pickKind,
+    GeoCoordinate? areaCenter,
+    double radiusMeters = 500,
+  }) {
+    return _ActivityDialogResult._(
+      type: type,
+      details: details,
+      durationMinutes: durationMinutes,
+      pickKind: pickKind,
+      areaCenter: areaCenter,
+      radiusMeters: radiusMeters,
+    );
+  }
 
   final ItineraryStepType type;
   final String details;
   final int durationMinutes;
-  final LocationConstraint location;
+  final LocationConstraint? location;
+  final TripLocationPickKind? pickKind;
+  final GeoCoordinate? areaCenter;
+  final double radiusMeters;
 }
 
 extension on SelectedMapTarget {

@@ -14,6 +14,14 @@ class MapStyleConfig {
   static const routeAlternativesLayerId = 'meander-route-alternatives-line';
   static const routeSelectedSourceId = 'meander-route-selected';
   static const routeSelectedLayerId = 'meander-route-selected-line';
+  static const draftLocationPointSourceId = 'meander-draft-location-point';
+  static const draftLocationPointLayerId =
+      'meander-draft-location-point-circle';
+  static const draftLocationAreaSourceId = 'meander-draft-location-area';
+  static const draftLocationAreaFillLayerId =
+      'meander-draft-location-area-fill';
+  static const draftLocationAreaStrokeLayerId =
+      'meander-draft-location-area-stroke';
 
   static const interactiveLayerIds = <String>[
     'poi-icons-priority',
