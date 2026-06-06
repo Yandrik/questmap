@@ -11,7 +11,7 @@ void main() {
 
     expect(find.text('Questmap'), findsOneWidget);
     expect(find.byType(MapLibreMap), findsOneWidget);
-    expect(find.text('OMT objects'), findsOneWidget);
+    expect(find.text('Map target'), findsOneWidget);
 
     final map = tester.widget<MapLibreMap>(find.byType(MapLibreMap));
     expect(map.styleString, equals('assets/omt_style.json'));
