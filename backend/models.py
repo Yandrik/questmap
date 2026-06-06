@@ -1,8 +1,11 @@
+from surrealdb import Geometry
 from datetime import datetime
+from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field
-
-from schemas import AreaStep, GeometryPointField, LocationStep, PathStep, RouteStep
+from pydantic import BaseModel, Field
+from surreal_orm import BaseSurrealModel, SurrealConfigDict
+from surreal_orm.types import SchemaMode
+from surrealdb.data.types.geometry import GeometryPoint, GeometryPolygon,GeometryLine
 
 
 class Activity(BaseModel):
@@ -13,40 +16,48 @@ class Activity(BaseModel):
     specification: str | None = None
 
 
-class Trip(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+class Trip(BaseSurrealModel):
+    model_config = SurrealConfigDict(
+        table_name="trip",
+        schema_mode=SchemaMode.SCHEMAFULL,
+        arbitrary_types_allowed=True,
+    )
 
     id: str | None = None
     start_time: datetime
-    start_location: GeometryPointField
+    start_location: GeometryPoint
     end_time: datetime
-    end_location: GeometryPointField
+    end_location: GeometryPoint
     activities: list[Activity] = Field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
-# Stubs — not yet implemented
-# ---------------------------------------------------------------------------
-
-
-class Quest(BaseModel):
-    id: str | None = None
-
-
-class QuestCompletion(BaseModel):
-    id: str | None = None
 
 
 # ---------------------------------------------------------------------------
 # Route / RouteStep
 # ---------------------------------------------------------------------------
 
-# Re-export from schemas for convenience
-__all__ = ["AreaStep", "LocationStep", "PathStep", "RouteStep"]
+class RouteStepType(StrEnum):
+    path = "path"
+    area = "area"
+    location = "location"
 
+class RouteStep(BaseSurrealModel):
+    type: RouteStepType
+    name: str
+    description: str | None = None
+    duration: float # in minutes
+    area: GeometryPolygon | None = None
+    path: GeometryLine | None = None
+    location: GeometryPoint | None = None
 
-class Route(BaseModel):
+class Route(BaseSurrealModel):
+    model_config = SurrealConfigDict(
+        table_name="route",
+        schema_mode=SchemaMode.SCHEMAFULL,
+        arbitrary_types_allowed=True,
+    )
+
     id: str | None = None
     name: str
     trip_id: str
     steps: list[RouteStep] = Field(default_factory=list)
+

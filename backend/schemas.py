@@ -7,6 +7,8 @@ from pydantic.functional_serializers import PlainSerializer
 from pydantic.functional_validators import BeforeValidator
 from surrealdb.data.types.geometry import GeometryLine, GeometryPoint, GeometryPolygon
 
+from models import RouteStepType
+
 # ---------------------------------------------------------------------------
 # Annotated geometry field types (API <-> surrealdb native types)
 # ---------------------------------------------------------------------------
@@ -83,16 +85,6 @@ GeometryPolygonField = Annotated[
     PlainSerializer(_serialize_polygon, return_type=dict, when_used="json"),
 ]
 
-
-# ---------------------------------------------------------------------------
-# RouteStep type enum
-# ---------------------------------------------------------------------------
-
-
-class RouteStepType(StrEnum):
-    path = "path"
-    area = "area"
-    location = "location"
 
 
 # ---------------------------------------------------------------------------
