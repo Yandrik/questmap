@@ -5,10 +5,10 @@
 // 'flutter create' template.
 
 // The application's name. By default this is also the title of the Flutter window.
-PRODUCT_NAME = questmap_app
+PRODUCT_NAME = meander
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = dev.questmap.questmapApp
+PRODUCT_BUNDLE_IDENTIFIER = dev.meander.meanderApp
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 dev.questmap. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 dev.meander. All rights reserved.

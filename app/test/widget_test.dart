@@ -1,17 +1,17 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
-import 'package:questmap_app/main.dart';
+import 'package:meander/app/meander.dart';
 
 void main() {
   testWidgets('renders the MapLibre OMT map shell', (
     WidgetTester tester,
   ) async {
-    await tester.pumpWidget(const QuestmapApp());
+    await tester.pumpWidget(const MeanderApp());
 
-    expect(find.text('Questmap'), findsOneWidget);
+    expect(find.text('Meander'), findsOneWidget);
     expect(find.byType(MapLibreMap), findsOneWidget);
-    expect(find.text('OMT objects'), findsOneWidget);
+    expect(find.text('Map target'), findsOneWidget);
 
     final map = tester.widget<MapLibreMap>(find.byType(MapLibreMap));
     expect(map.styleString, equals('assets/omt_style.json'));

@@ -1,4 +1,4 @@
-# questmap_app
+# meander
 
 A new Flutter project.
 

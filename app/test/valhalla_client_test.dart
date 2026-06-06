@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:questmap_app/valhalla_client.dart';
+import 'package:meander/features/routing/model/valhalla_route_request.dart';
 
 void main() {
   test('serializes a route request using Valhalla OpenAPI field names', () {

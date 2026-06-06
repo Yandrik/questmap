@@ -1,4 +1,4 @@
-# Questmap
+# Meander
 
 ## Backend
 
@@ -25,8 +25,8 @@ Default local credentials:
 
 - Username: `root`
 - Password: `root`
-- Namespace: `questmap`
-- Database: `questmap`
+- Namespace: `meander`
+- Database: `meander`
 
 ### Valhalla routing
 
@@ -66,7 +66,7 @@ Useful Valhalla settings are exposed through Compose variables:
 The backend reads `VALHALLA_URL` and defaults to `http://localhost:8002` outside
 Compose. The Python integration uses `httpx` with Pydantic request models
 mirroring the Valhalla OpenAPI `/route` schema. The Flutter app uses `dio` with
-matching Dart request models in `app/lib/valhalla_client.dart`. The OpenAPI
+matching Dart request models under `app/lib/features/routing/`. The OpenAPI
 source used for reference is checked in at `openapi/valhalla.openapi.yaml`.
 
 ### MOTIS transit routing
@@ -83,8 +83,8 @@ Prepare/import MOTIS data through the scripts documented in `motis/README.md`
 before starting the server. The backend reads `MOTIS_URL` and defaults to
 `http://localhost:8010` outside Compose. The Python integration uses `httpx`
 with a Pydantic request model mirroring the MOTIS OpenAPI `/api/v6/plan` query
-schema. The Flutter app uses `dio` with matching Dart request models in
-`app/lib/motis_client.dart`. The OpenAPI source used for reference is checked
+schema. The Flutter app uses `dio` with matching Dart request models under
+`app/lib/features/transit/`. The OpenAPI source used for reference is checked
 in at `openapi/motis.openapi.yaml`.
 
 ### Local development
@@ -101,7 +101,7 @@ surreal start \
   --bind 127.0.0.1:8001 \
   --user root \
   --pass root \
-  rocksdb:.surrealdb-data/questmap.db
+  rocksdb:.surrealdb-data/meander.db
 ```
 
 Or, if you do not have the local `surreal` CLI installed, run SurrealDB through
@@ -114,7 +114,7 @@ docker run --rm --pull always \
   -p 8001:8000 \
   -v "$PWD/.surrealdb-data:/data" \
   surrealdb/surrealdb:latest-dev \
-  start --user root --pass root rocksdb:/data/questmap.db
+  start --user root --pass root rocksdb:/data/meander.db
 ```
 
 Then start the backend in another terminal:
@@ -123,8 +123,8 @@ Then start the backend in another terminal:
 cd backend
 
 SURREALDB_URL=ws://localhost:8001 \
-SURREALDB_NAMESPACE=questmap \
-SURREALDB_DATABASE=questmap \
+SURREALDB_NAMESPACE=meander \
+SURREALDB_DATABASE=meander \
 SURREALDB_USERNAME=root \
 SURREALDB_PASSWORD=root \
 VALHALLA_URL=http://localhost:8002 \

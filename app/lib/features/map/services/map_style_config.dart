@@ -1,0 +1,27 @@
+import 'package:maplibre_gl/maplibre_gl.dart';
+
+class MapStyleConfig {
+  const MapStyleConfig._();
+
+  static const initialCameraPosition = CameraPosition(
+    target: LatLng(37.7749, -122.4194),
+    zoom: 16,
+  );
+
+  static const selectionSourceId = 'meander-selection';
+  static const selectionLayerId = 'meander-selection-circle';
+
+  static const interactiveLayerIds = <String>[
+    'poi-icons-priority',
+    'poi-dots-known-dense',
+    'poi-dots-other',
+    'mountain-peak-points',
+    'aerodrome-points',
+    'water-name-points',
+    'transportation-name-points',
+    'poi-labels',
+    'housenumber-labels',
+    'place-labels',
+    'transportation-labels',
+  ];
+}
