@@ -1,18 +1,22 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime
 from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-from pydantic.alias_generators import to_camel
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from surreal_orm import SurrealDBConnectionManager
-from surrealdb import AsyncSurreal, SurrealError
+from surrealdb import AsyncSurreal, RecordID, SurrealError
 
-from models import GeoPoint, GeoPolygon, Quest, QuestCompletion
 from motis import MotisClient, MotisPlanRequest
+from schemas import (
+    ActivityResponse,
+    DatabaseHealthResponse,
+    GeoPoint,
+    HealthResponse,
+    TripCreate,
+    TripResponse,
+)
 from valhalla import ValhallaClient, ValhallaRouteRequest
 
 
@@ -44,12 +48,20 @@ class MotisSettings(BaseSettings):
     url: str = Field(default="http://localhost:8080")
 
 
-def _ws_url_to_http(ws_url: str) -> str:
-    if ws_url.startswith("wss://"):
-        return "https://" + ws_url[len("wss://") :]
-    if ws_url.startswith("ws://"):
-        return "http://" + ws_url[len("ws://") :]
-    return ws_url
+
+_SCHEMA_SQL = """
+DEFINE TABLE IF NOT EXISTS trip SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS start_time ON trip TYPE datetime;
+DEFINE FIELD IF NOT EXISTS start_location ON trip TYPE string;
+DEFINE FIELD IF NOT EXISTS end_time ON trip TYPE datetime;
+DEFINE FIELD IF NOT EXISTS end_location ON trip TYPE string;
+DEFINE FIELD IF NOT EXISTS activities ON trip TYPE array;
+DEFINE FIELD IF NOT EXISTS activities[*] ON trip TYPE object;
+DEFINE FIELD IF NOT EXISTS activities[*].type ON trip TYPE string;
+DEFINE FIELD IF NOT EXISTS activities[*].duration_minutes ON trip TYPE int;
+DEFINE FIELD IF NOT EXISTS activities[*].specification ON trip TYPE option<string>;
+"""
+
 
 
 @asynccontextmanager
@@ -67,14 +79,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "password": settings.password,
         }
     )
-
-    SurrealDBConnectionManager.set_connection(
-        url=_ws_url_to_http(settings.url),
-        user=settings.username,
-        password=settings.password,
-        namespace=settings.namespace,
-        database=settings.database,
-    )
+    await db.query(_SCHEMA_SQL)
 
     app.state.settings = settings
     app.state.valhalla_settings = valhalla_settings
@@ -88,21 +93,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await app.state.motis.close()
         await app.state.valhalla.close()
-        await SurrealDBConnectionManager.close_connection()
         await db.close()
 
 
 app = FastAPI(title="Questmap API", lifespan=lifespan)
-
-
-class HealthResponse(BaseModel):
-    status: str
-
-
-class DatabaseHealthResponse(HealthResponse):
-    url: str
-    namespace: str
-    database: str
 
 
 class RoutingHealthResponse(HealthResponse):
@@ -113,6 +107,7 @@ class RoutingHealthResponse(HealthResponse):
 class TransitHealthResponse(HealthResponse):
     url: str
     upstream: dict[str, Any]
+
 
 
 @app.get("/health")
@@ -200,225 +195,70 @@ async def transit_plan(body: MotisPlanRequest, request: Request) -> dict[str, An
 
 
 # ---------------------------------------------------------------------------
-# Quest schemas
+# Trips
 # ---------------------------------------------------------------------------
 
-_quest_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+def _to_geo(raw) -> GeoPoint:
+    """Convert a SurrealDB geometry<point> value to GeoPoint."""
+    coords = raw["coordinates"] if isinstance(raw, dict) else raw.coordinates
+    return GeoPoint(lon=coords[0], lat=coords[1])
 
 
-class QuestCreate(BaseModel):
-    model_config = _quest_config
-
-    start_time: datetime
-    end_time: datetime
-    position: GeoPoint | None = None
-    area: GeoPolygon | None = None
-    num_completions: int | None = None
-    description: str
-    xp_val: int = Field(..., ge=0)
-    issuer_id: str = Field(..., alias="issuerID")
-
-    @model_validator(mode="after")
-    def require_position_or_area(self) -> "QuestCreate":
-        if self.position is None and self.area is None:
-            raise ValueError("At least one of 'position' or 'area' must be provided")
-        return self
+def _from_geo(p: GeoPoint) -> dict:
+    """Convert a GeoPoint to a GeoJSON Point dict for SurrealDB."""
+    return {"type": "Point", "coordinates": [p.lon, p.lat]}
 
 
-class QuestUpdate(BaseModel):
-    model_config = _quest_config
-
-    start_time: datetime | None = None
-    end_time: datetime | None = None
-    position: GeoPoint | None = None
-    area: GeoPolygon | None = None
-    num_completions: int | None = None
-    description: str | None = None
-    xp_val: int | None = Field(default=None, ge=0)
-    issuer_id: str | None = Field(default=None, alias="issuerID")
-
-
-class QuestResponse(BaseModel):
-    model_config = _quest_config
-
-    id: str
-    start_time: datetime
-    end_time: datetime
-    position: GeoPoint | None = None
-    area: GeoPolygon | None = None
-    num_completions: int | None = None
-    description: str
-    xp_val: int
-    issuer_id: str = Field(..., alias="issuerID")
+def _trip_to_response(raw: dict) -> TripResponse:
+    return TripResponse(
+        id=str(raw["id"].id),
+        start_time=raw["start_time"],
+        start_location=_to_geo(raw["start_location"]),
+        end_time=raw["end_time"],
+        end_location=_to_geo(raw["end_location"]),
+        activities=[
+            ActivityResponse(
+                type=a["type"],
+                duration_minutes=a["duration_minutes"],
+                specification=a.get("specification"),
+            )
+            for a in raw.get("activities", [])
+        ],
+    )
 
 
-# ---------------------------------------------------------------------------
-# Completion schemas
-# ---------------------------------------------------------------------------
-
-_completion_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-
-
-class CompletionCreate(BaseModel):
-    model_config = _completion_config
-
-    quest_id: str = Field(..., alias="questID")
-    completion_time: datetime
-    completion_user_id: str = Field(..., alias="completionUserID")
-    proof_urls: list[str] | None = None
-    confirmed: bool
-    location: GeoPoint
-    user_location: GeoPoint | None = None
-
-
-class CompletionConfirm(BaseModel):
-    confirmed: bool
-
-
-class CompletionResponse(BaseModel):
-    model_config = _completion_config
-
-    id: str
-    quest_id: str = Field(..., alias="questID")
-    completion_time: datetime
-    completion_user_id: str = Field(..., alias="completionUserID")
-    proof_urls: list[str] | None = None
-    confirmed: bool
-    location: GeoPoint
-    user_location: GeoPoint | None = None
-
-
-def _completion_to_response(c: QuestCompletion) -> CompletionResponse:
-    return CompletionResponse.model_validate(
+@app.post("/trips", status_code=201)
+async def create_trip(body: TripCreate, request: Request) -> TripResponse:
+    raw = await request.app.state.db.create(
+        "trip",
         {
-            "id": c.id,
-            "questID": c.quest_id,
-            "completionTime": c.completion_time,
-            "completionUserID": c.completion_user_id,
-            "proofUrls": c.proof_urls,
-            "confirmed": c.confirmed,
-            "location": c.location,
-            "userLocation": c.user_location,
-        }
+            "start_time": body.start_time,
+            "start_location": _from_geo(body.start_location),
+            "end_time": body.end_time,
+            "end_location": _from_geo(body.end_location),
+            "activities": [
+                {
+                    "type": a.type,
+                    "duration_minutes": a.duration_minutes,
+                    "specification": a.specification,
+                }
+                for a in body.activities
+            ],
+        },
     )
+    return _trip_to_response(raw)
 
 
-async def _get_completion_or_404(completion_id: str) -> QuestCompletion:
-    try:
-        return await QuestCompletion.objects().get(completion_id)
-    except QuestCompletion.DoesNotExist as exc:
-        raise HTTPException(status_code=404, detail="Completion not found") from exc
+@app.get("/trips")
+async def list_trips(request: Request) -> list[TripResponse]:
+    raws = await request.app.state.db.select("trip") or []
+    return [_trip_to_response(r) for r in raws]
 
 
-def _quest_to_response(q: Quest) -> QuestResponse:
-    return QuestResponse.model_validate(
-        {
-            "id": q.id,
-            "start_time": q.start_time,
-            "end_time": q.end_time,
-            "position": q.position,
-            "area": q.area,
-            "num_completions": q.num_completions,
-            "description": q.description,
-            "xp_val": q.xp_val,
-            "issuerID": q.issuer_id,
-        }
-    )
-
-
-async def _get_quest_or_404(quest_id: str) -> Quest:
-    try:
-        return await Quest.objects().get(quest_id)
-    except Quest.DoesNotExist as exc:
-        raise HTTPException(status_code=404, detail="Quest not found") from exc
-
-
-# ---------------------------------------------------------------------------
-# Quest endpoints
-# ---------------------------------------------------------------------------
-
-
-@app.post("/quests", status_code=201)
-async def create_quest(body: QuestCreate) -> QuestResponse:
-    quest = Quest(
-        start_time=body.start_time,
-        end_time=body.end_time,
-        position=body.position,
-        area=body.area,
-        num_completions=body.num_completions,
-        description=body.description,
-        xp_val=body.xp_val,
-        issuer_id=body.issuer_id,
-    )
-    await quest.save()
-    return _quest_to_response(quest)
-
-
-@app.get("/quests")
-async def list_quests() -> list[QuestResponse]:
-    quests: list[Quest] = await Quest.objects().all()
-    return [_quest_to_response(q) for q in quests]
-
-
-@app.get("/quests/{quest_id}")
-async def get_quest(quest_id: str) -> QuestResponse:
-    quest = await _get_quest_or_404(quest_id)
-    return _quest_to_response(quest)
-
-
-@app.put("/quests/{quest_id}")
-async def update_quest(quest_id: str, body: QuestUpdate) -> QuestResponse:
-    quest = await _get_quest_or_404(quest_id)
-    updates: dict[str, Any] = {
-        k: v
-        for k, v in body.model_dump(exclude_unset=True, by_alias=False).items()
-        if v is not None
-    }
-    if updates:
-        await quest.merge(**updates)
-        await quest.refresh()
-    return _quest_to_response(quest)
-
-
-@app.delete("/quests/{quest_id}", status_code=204)
-async def delete_quest(quest_id: str) -> None:
-    quest = await _get_quest_or_404(quest_id)
-    await quest.delete()
-
-
-# ---------------------------------------------------------------------------
-# Completion endpoints
-# ---------------------------------------------------------------------------
-
-
-@app.post("/completions", status_code=201)
-async def create_completion(body: CompletionCreate) -> CompletionResponse:
-    completion = QuestCompletion(
-        quest_id=body.quest_id,
-        completion_time=body.completion_time,
-        completion_user_id=body.completion_user_id,
-        proof_urls=body.proof_urls,
-        confirmed=body.confirmed,
-        location=body.location,
-        user_location=body.user_location,
-    )
-    await completion.save()
-    return _completion_to_response(completion)
-
-
-@app.get("/quests/{quest_id}/completions")
-async def list_quest_completions(quest_id: str) -> list[CompletionResponse]:
-    completions: list[QuestCompletion] = (
-        await QuestCompletion.objects().filter(quest_id=quest_id).all()
-    )
-    return [_completion_to_response(c) for c in completions]
-
-
-@app.put("/completions/{completion_id}/confirm")
-async def confirm_completion(
-    completion_id: str, body: CompletionConfirm
-) -> CompletionResponse:
-    completion = await _get_completion_or_404(completion_id)
-    await completion.merge(confirmed=body.confirmed)
-    await completion.refresh()
-    return _completion_to_response(completion)
+@app.get("/trips/{trip_id}")
+async def get_trip(trip_id: str, request: Request) -> TripResponse:
+    raw = await request.app.state.db.select(RecordID("trip", trip_id))
+    if raw is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    return _trip_to_response(raw)

@@ -1,0 +1,54 @@
+@baseUrl = http://localhost:8000
+
+### Health check
+GET {{baseUrl}}/health
+
+### Database health check
+GET {{baseUrl}}/db/health
+
+### Create a trip (no activities)
+POST {{baseUrl}}/trips
+Content-Type: application/json
+
+{
+  "start_time": "2026-06-10T08:00:00Z",
+  "start_location": { "lat": 52.5251, "lon": 13.3694 },
+  "end_time": "2026-06-10T18:00:00Z",
+  "end_location": { "lat": 48.1402, "lon": 11.5583 },
+  "activities": []
+}
+
+### Create a trip (with activities)
+POST {{baseUrl}}/trips
+Content-Type: application/json
+
+{
+  "start_time": "2026-07-01T09:00:00Z",
+  "start_location": { "lat": 53.5530, "lon": 10.0058 },
+  "end_time": "2026-07-03T20:00:00Z",
+  "end_location": { "lat": 48.2002, "lon": 16.3706 },
+  "activities": [
+    {
+      "type": "hike",
+      "duration_minutes": 120,
+      "specification": "Trail through the Black Forest, moderate difficulty"
+    },
+    {
+      "type": "sightseeing",
+      "duration_minutes": 60,
+      "specification": null
+    },
+    {
+      "type": "meal",
+      "duration_minutes": 45,
+      "specification": "Traditional Bavarian dinner"
+    }
+  ]
+}
+
+### List all trips
+GET {{baseUrl}}/trips
+
+### Get a single trip by ID
+# Replace the ID below with one returned from a POST /trips response
+GET {{baseUrl}}/trips/trip:abc123
