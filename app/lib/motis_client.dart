@@ -228,7 +228,7 @@ class MotisPlanRequest {
 }
 
 class MotisClient {
-  MotisClient({String baseUrl = 'http://localhost:8080', Dio? dio})
+  MotisClient({String baseUrl = 'http://localhost:8010', Dio? dio})
     : _dio = dio ?? Dio(BaseOptions(baseUrl: baseUrl));
 
   final Dio _dio;

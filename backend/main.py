@@ -45,7 +45,7 @@ class MotisSettings(BaseSettings):
         env_prefix="MOTIS_", case_sensitive=False, env_file=".env", extra="ignore"
     )
 
-    url: str = Field(default="http://localhost:8080")
+    url: str = Field(default="http://localhost:8010")
 
 
 
