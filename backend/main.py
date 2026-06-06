@@ -10,10 +10,15 @@ from surrealdb import AsyncSurreal, RecordID, SurrealError
 
 from motis import MotisClient, MotisPlanRequest
 from schemas import (
+    AreaStep,
     ActivityResponse,
     DatabaseHealthResponse,
-    GeoPoint,
     HealthResponse,
+    LocationStep,
+    PathStep,
+    RouteCreate,
+    RouteResponse,
+    RouteStep,
     TripCreate,
     TripResponse,
 )
@@ -52,14 +57,27 @@ class MotisSettings(BaseSettings):
 _SCHEMA_SQL = """
 DEFINE TABLE IF NOT EXISTS trip SCHEMAFULL;
 DEFINE FIELD IF NOT EXISTS start_time ON trip TYPE datetime;
-DEFINE FIELD IF NOT EXISTS start_location ON trip TYPE string;
+DEFINE FIELD IF NOT EXISTS start_location ON trip TYPE geometry<point>;
 DEFINE FIELD IF NOT EXISTS end_time ON trip TYPE datetime;
-DEFINE FIELD IF NOT EXISTS end_location ON trip TYPE string;
+DEFINE FIELD IF NOT EXISTS end_location ON trip TYPE geometry<point>;
 DEFINE FIELD IF NOT EXISTS activities ON trip TYPE array;
 DEFINE FIELD IF NOT EXISTS activities[*] ON trip TYPE object;
 DEFINE FIELD IF NOT EXISTS activities[*].type ON trip TYPE string;
 DEFINE FIELD IF NOT EXISTS activities[*].duration_minutes ON trip TYPE int;
 DEFINE FIELD IF NOT EXISTS activities[*].specification ON trip TYPE option<string>;
+
+DEFINE TABLE IF NOT EXISTS route SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS name ON route TYPE string;
+DEFINE FIELD IF NOT EXISTS trip ON route TYPE record<trip>;
+DEFINE FIELD IF NOT EXISTS steps ON route TYPE array;
+DEFINE FIELD IF NOT EXISTS steps[*] ON route TYPE object;
+DEFINE FIELD IF NOT EXISTS steps[*].name ON route TYPE string;
+DEFINE FIELD IF NOT EXISTS steps[*].duration ON route TYPE float;
+DEFINE FIELD IF NOT EXISTS steps[*].description ON route TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS steps[*].type ON route TYPE string;
+DEFINE FIELD IF NOT EXISTS steps[*].location ON route TYPE option<geometry<point>>;
+DEFINE FIELD IF NOT EXISTS steps[*].path ON route TYPE option<geometry<linestring>>;
+DEFINE FIELD IF NOT EXISTS steps[*].area ON route TYPE option<geometry<polygon>>;
 """
 
 
@@ -199,24 +217,13 @@ async def transit_plan(body: MotisPlanRequest, request: Request) -> dict[str, An
 # ---------------------------------------------------------------------------
 
 
-def _to_geo(raw) -> GeoPoint:
-    """Convert a SurrealDB geometry<point> value to GeoPoint."""
-    coords = raw["coordinates"] if isinstance(raw, dict) else raw.coordinates
-    return GeoPoint(lon=coords[0], lat=coords[1])
-
-
-def _from_geo(p: GeoPoint) -> dict:
-    """Convert a GeoPoint to a GeoJSON Point dict for SurrealDB."""
-    return {"type": "Point", "coordinates": [p.lon, p.lat]}
-
-
 def _trip_to_response(raw: dict) -> TripResponse:
     return TripResponse(
         id=str(raw["id"].id),
         start_time=raw["start_time"],
-        start_location=_to_geo(raw["start_location"]),
+        start_location=raw["start_location"],
         end_time=raw["end_time"],
-        end_location=_to_geo(raw["end_location"]),
+        end_location=raw["end_location"],
         activities=[
             ActivityResponse(
                 type=a["type"],
@@ -234,9 +241,9 @@ async def create_trip(body: TripCreate, request: Request) -> TripResponse:
         "trip",
         {
             "start_time": body.start_time,
-            "start_location": _from_geo(body.start_location),
+            "start_location": body.start_location,
             "end_time": body.end_time,
-            "end_location": _from_geo(body.end_location),
+            "end_location": body.end_location,
             "activities": [
                 {
                     "type": a.type,
@@ -262,3 +269,91 @@ async def get_trip(trip_id: str, request: Request) -> TripResponse:
     if raw is None:
         raise HTTPException(status_code=404, detail="Trip not found")
     return _trip_to_response(raw)
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+
+def _step_to_dict(s: RouteStep) -> dict:  # type: ignore[type-arg]
+    base: dict = {
+        "name": s.name,
+        "duration": s.duration,
+        "description": s.description,
+        "type": s.type.value,
+        "location": None,
+        "path": None,
+        "area": None,
+    }
+    if isinstance(s, LocationStep):
+        base["location"] = s.location
+    elif isinstance(s, PathStep):
+        base["path"] = s.path
+    elif isinstance(s, AreaStep):
+        base["area"] = s.area
+    return base
+
+
+def _step_from_dict(s: dict) -> RouteStep:
+    t = s["type"]
+    if t == "location":
+        return LocationStep(
+            name=s["name"],
+            duration=s["duration"],
+            description=s.get("description"),
+            location=s["location"],
+        )
+    if t == "path":
+        return PathStep(
+            name=s["name"],
+            duration=s["duration"],
+            description=s.get("description"),
+            path=s["path"],
+        )
+    if t == "area":
+        return AreaStep(
+            name=s["name"],
+            duration=s["duration"],
+            description=s.get("description"),
+            area=s["area"],
+        )
+    raise ValueError(f"Unknown step type: {t!r}")
+
+
+def _route_to_response(raw: dict) -> RouteResponse:
+    trip_ref = raw["trip"]
+    trip_id = str(trip_ref.id) if hasattr(trip_ref, "id") else str(trip_ref)
+    return RouteResponse(
+        id=str(raw["id"].id),
+        name=raw["name"],
+        trip_id=trip_id,
+        steps=[_step_from_dict(s) for s in raw.get("steps", [])],
+    )
+
+
+@app.post("/routes", status_code=201)
+async def create_route(body: RouteCreate, request: Request) -> RouteResponse:
+    raw = await request.app.state.db.create(
+        "route",
+        {
+            "name": body.name,
+            "trip": RecordID("trip", body.trip_id),
+            "steps": [_step_to_dict(s) for s in body.steps],
+        },
+    )
+    return _route_to_response(raw)
+
+
+@app.get("/routes")
+async def list_routes(request: Request) -> list[RouteResponse]:
+    raws = await request.app.state.db.select("route") or []
+    return [_route_to_response(r) for r in raws]
+
+
+@app.get("/routes/{route_id}")
+async def get_route(route_id: str, request: Request) -> RouteResponse:
+    raw = await request.app.state.db.select(RecordID("route", route_id))
+    if raw is None:
+        raise HTTPException(status_code=404, detail="Route not found")
+    return _route_to_response(raw)

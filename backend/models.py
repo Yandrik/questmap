@@ -1,8 +1,8 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from schemas import GeoPoint
+from schemas import AreaStep, GeometryPointField, LocationStep, PathStep, RouteStep
 
 
 class Activity(BaseModel):
@@ -14,11 +14,13 @@ class Activity(BaseModel):
 
 
 class Trip(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     id: str | None = None
     start_time: datetime
-    start_location: GeoPoint
+    start_location: GeometryPointField
     end_time: datetime
-    end_location: GeoPoint
+    end_location: GeometryPointField
     activities: list[Activity] = Field(default_factory=list)
 
 
@@ -33,3 +35,18 @@ class Quest(BaseModel):
 
 class QuestCompletion(BaseModel):
     id: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Route / RouteStep
+# ---------------------------------------------------------------------------
+
+# Re-export from schemas for convenience
+__all__ = ["AreaStep", "LocationStep", "PathStep", "RouteStep"]
+
+
+class Route(BaseModel):
+    id: str | None = None
+    name: str
+    trip_id: str
+    steps: list[RouteStep] = Field(default_factory=list)
