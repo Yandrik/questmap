@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
-COPY main.py ./
+COPY *.py ./
 
 EXPOSE 8000
 
