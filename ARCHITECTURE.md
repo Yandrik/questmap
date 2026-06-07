@@ -178,7 +178,7 @@ Use a single backend base URL configuration for app API calls, preferably via
 `--dart-define`, for example:
 
 ```sh
---dart-define=QUESTMAP_API_BASE_URL=http://localhost:8000
+--dart-define=QUESTMAP_API_BASE_URL=https://back.hack5.yandrik.dev
 ```
 
 Backend-facing services should be feature-owned:
