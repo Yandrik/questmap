@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -13,6 +14,19 @@ from surrealdb import AsyncSurreal, SurrealError
 
 from models import GeoPoint, GeoPolygon, Quest, QuestCompletion
 from motis import MotisClient, MotisPlanRequest
+from trip_planning import (
+    InvalidAnswerError,
+    SessionNotFoundError,
+    StaleAnswerError,
+    SurrealTripPlanningRepository,
+    TripPlanningService,
+)
+from trip_planning_models import (
+    TripPlanningAnswer,
+    TripPlanningRequest,
+    TripPlanningSessionSnapshot,
+    TripPlanningStartResponse,
+)
 from valhalla import ValhallaClient, ValhallaRouteRequest
 
 
@@ -82,10 +96,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.db = db
     app.state.valhalla = ValhallaClient(valhalla_settings.url)
     app.state.motis = MotisClient(motis_settings.url)
+    app.state.trip_planning = TripPlanningService(
+        SurrealTripPlanningRepository(db),
+        app.state.valhalla,
+        app.state.motis,
+    )
 
     try:
         yield
     finally:
+        await app.state.trip_planning.close()
         await app.state.motis.close()
         await app.state.valhalla.close()
         await SurrealDBConnectionManager.close_connection()
@@ -197,6 +217,65 @@ async def transit_plan(body: MotisPlanRequest, request: Request) -> dict[str, An
         raise HTTPException(status_code=502, detail="MOTIS plan failed") from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail="MOTIS plan failed") from exc
+
+
+# ---------------------------------------------------------------------------
+# Trip-planning endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post("/trip-planning/sessions")
+async def create_trip_planning_session(
+    body: TripPlanningRequest, request: Request
+) -> TripPlanningStartResponse:
+    session_id = await request.app.state.trip_planning.start_session(body)
+    return TripPlanningStartResponse(session_id=session_id)
+
+
+@app.get("/trip-planning/sessions/{session_id}")
+async def get_trip_planning_session(
+    session_id: str, request: Request
+) -> TripPlanningSessionSnapshot:
+    try:
+        return await request.app.state.trip_planning.get_session(session_id)
+    except SessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Session not found") from exc
+
+
+@app.get("/trip-planning/sessions/{session_id}/events")
+async def stream_trip_planning_events(
+    session_id: str, request: Request
+) -> StreamingResponse:
+    try:
+        await request.app.state.trip_planning.get_session(session_id)
+        stream = request.app.state.trip_planning.stream_events(session_id)
+        return StreamingResponse(stream, media_type="text/event-stream")
+    except SessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Session not found") from exc
+
+
+@app.post("/trip-planning/sessions/{session_id}/answers", status_code=204)
+async def answer_trip_planning_question(
+    session_id: str,
+    body: TripPlanningAnswer,
+    request: Request,
+) -> None:
+    try:
+        await request.app.state.trip_planning.answer_question(session_id, body)
+    except SessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Session not found") from exc
+    except StaleAnswerError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except InvalidAnswerError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/trip-planning/sessions/{session_id}/cancel", status_code=204)
+async def cancel_trip_planning_session(session_id: str, request: Request) -> None:
+    try:
+        await request.app.state.trip_planning.cancel_session(session_id)
+    except SessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Session not found") from exc
 
 
 # ---------------------------------------------------------------------------

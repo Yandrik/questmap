@@ -16,6 +16,11 @@ The API is available at `http://localhost:8000`.
 - `POST /routing/route` proxies typed Valhalla `/route` requests.
 - `GET /transit/health` checks the MOTIS transit routing service.
 - `POST /transit/plan` proxies typed MOTIS `/api/v6/plan` requests.
+- `POST /trip-planning/sessions` starts a durable routed trip-planning run.
+- `GET /trip-planning/sessions/{sessionId}` returns a resumable session snapshot.
+- `GET /trip-planning/sessions/{sessionId}/events` streams planning SSE events.
+- `POST /trip-planning/sessions/{sessionId}/answers` answers agent questions.
+- `POST /trip-planning/sessions/{sessionId}/cancel` cancels a running session.
 
 SurrealDB is also exposed on `localhost:8001` for local CLI or SDK access.
 Valhalla is exposed on `localhost:8002` for direct routing API access.

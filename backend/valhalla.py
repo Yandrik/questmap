@@ -21,6 +21,7 @@ CostingType = Literal[
 
 ShapeFormat = Literal["polyline6", "polyline5", "geojson", "no_shape"]
 Unit = Literal["kilometers", "miles"]
+DirectionsType = Literal["none", "maneuvers", "instructions"]
 
 
 class ValhallaLocation(BaseModel):
@@ -39,6 +40,8 @@ class ValhallaRouteRequest(BaseModel):
     costing: CostingType = "pedestrian"
     costing_options: dict[str, Any] | None = None
     directions_options: dict[str, Any] | None = None
+    alternates: int | None = Field(default=None, ge=0)
+    directions_type: DirectionsType | None = None
     shape_format: ShapeFormat = "polyline6"
     units: Unit = "kilometers"
     language: str | None = None
