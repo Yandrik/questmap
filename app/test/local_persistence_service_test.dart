@@ -1,19 +1,11 @@
-import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meander/_shared/services/local_database.dart';
 import 'package:meander/_shared/services/local_persistence_service.dart';
 
 void main() {
-  late LocalDatabase database;
   late LocalPersistenceService service;
 
   setUp(() {
-    database = LocalDatabase(NativeDatabase.memory());
-    service = LocalPersistenceService(database);
-  });
-
-  tearDown(() async {
-    await database.close();
+    service = LocalPersistenceService(MemoryLocalPersistenceStore());
   });
 
   test('stores, updates, lists, and deletes JSON payloads', () async {

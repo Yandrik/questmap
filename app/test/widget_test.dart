@@ -1,10 +1,8 @@
-import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:watch_it/watch_it.dart';
 
 import 'package:meander/_shared/services/api_client.dart';
-import 'package:meander/_shared/services/local_database.dart';
 import 'package:meander/_shared/services/local_persistence_service.dart';
 import 'package:meander/app/meander.dart';
 import 'package:meander/features/location/manager/location_manager.dart';
@@ -25,12 +23,8 @@ void main() {
       () => ApiClient(baseUrl: 'http://api.test'),
       dispose: (client) => client.dispose(),
     );
-    di.registerLazySingleton<LocalDatabase>(
-      () => LocalDatabase(NativeDatabase.memory()),
-      dispose: (database) => database.close(),
-    );
     di.registerLazySingleton<LocalPersistenceService>(
-      () => LocalPersistenceService(di<LocalDatabase>()),
+      () => LocalPersistenceService(MemoryLocalPersistenceStore()),
     );
     di.registerLazySingleton<RoutingApiService>(
       () => RoutingApiService(di<ApiClient>()),

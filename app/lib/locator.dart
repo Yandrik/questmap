@@ -1,7 +1,6 @@
 import 'package:watch_it/watch_it.dart';
 
 import '_shared/services/api_client.dart';
-import '_shared/services/local_database.dart';
 import '_shared/services/local_persistence_service.dart';
 import 'app/app_config.dart';
 import 'features/location/manager/location_manager.dart';
@@ -22,12 +21,8 @@ void configureDependencies() {
     () => ApiClient(baseUrl: appApiBaseUrl),
     dispose: (client) => client.dispose(),
   );
-  di.registerLazySingleton<LocalDatabase>(
-    () => LocalDatabase(openLocalDatabaseConnection()),
-    dispose: (database) => database.close(),
-  );
   di.registerLazySingleton<LocalPersistenceService>(
-    () => LocalPersistenceService(di<LocalDatabase>()),
+    () => LocalPersistenceService(),
   );
   di.registerLazySingleton<RoutingApiService>(
     () => RoutingApiService(di<ApiClient>()),
