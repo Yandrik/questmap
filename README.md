@@ -28,27 +28,55 @@ Default local credentials:
 - Namespace: `meander`
 - Database: `meander`
 
+### Valhalla and MOTIS data
+
+The root Docker Compose stack prepares routing data through the `motis-data`
+service and stores it in persistent Docker volumes:
+
+- `motis-data`: OSM, GTFS, and imported MOTIS files.
+- `valhalla-data`: the OSM extract and generated Valhalla graph files.
+
+This is the preferred deployment path for Coolify because it avoids nested
+Docker bind mounts during the build. First deployment can take a while; later
+deployments reuse the volumes and skip the heavy download/import work.
+
+For a manual one-shot data preparation run:
+
+```sh
+./prepare.sh
+```
+
+To force a fresh OSM/GTFS download and MOTIS import:
+
+```sh
+FORCE_DATA_REFRESH=true ./prepare.sh
+```
+
+Then start the stack:
+
+```sh
+docker compose up -d --build
+```
+
 ### Valhalla routing
 
 Docker Compose runs `ghcr.io/valhalla/valhalla-scripted:latest` and mounts
-`./motis/data/valhalla` at `/custom_files`. Prepare the Bayern +
-Baden-Wuerttemberg extract with the MOTIS data script first:
+the persistent `valhalla-data` volume at `/custom_files`. The `motis-data`
+service prepares the Bayern + Baden-Wuerttemberg extract before Valhalla starts:
 
 ```sh
-./motis/scripts/prepare-by-bw-data.sh
 docker compose up valhalla
 curl http://localhost:8002/status
 ```
 
-The script downloads the Bayern and Baden-Wuerttemberg Geofabrik extracts,
-merges them into `motis/data/by-bw.osm.pbf`, and hard-links or copies that
-merged PBF into `motis/data/valhalla/by-bw.osm.pbf`. The scripted Valhalla
-image builds graph tiles from that local PBF and stores its generated files next
-to it.
+The data service downloads the Bayern and Baden-Wuerttemberg Geofabrik
+extracts, merges them into `by-bw.osm.pbf`, and hard-links or copies that
+merged PBF into the Valhalla data volume. The scripted Valhalla image builds
+graph tiles from that local PBF and stores its generated files next to it.
 
-To route somewhere else, set `VALHALLA_TILE_URLS` before starting Compose or put
-a different `.osm.pbf` into `motis/data/valhalla`. Using one local merged PBF is
-preferred over Valhalla's multi-URL build mode.
+To route somewhere else, change the OSM URLs in the data-prep script and force a
+data refresh. Using one local merged PBF in the Valhalla volume is preferred
+over Valhalla's multi-URL build mode.
 
 ```sh
 VALHALLA_TILE_URLS=https://download.geofabrik.de/europe/germany/berlin-latest.osm.pbf \
@@ -71,21 +99,21 @@ source used for reference is checked in at `openapi/valhalla.openapi.yaml`.
 
 ### MOTIS transit routing
 
-Docker Compose also runs the local MOTIS image from `motis/`, using
-`motis/data` as its read-only data directory:
+Docker Compose also runs the local MOTIS image from `motis/`, using the
+persistent `motis-data` volume as its read-only data directory:
 
 ```sh
 docker compose up motis
 curl http://localhost:8010/api/v1/health
 ```
 
-Prepare/import MOTIS data through the scripts documented in `motis/README.md`
-before starting the server. The backend reads `MOTIS_URL` and defaults to
-`http://localhost:8010` outside Compose. The Python integration uses `httpx`
-with a Pydantic request model mirroring the MOTIS OpenAPI `/api/v6/plan` query
-schema. The Flutter app uses `dio` with matching Dart request models under
-`app/lib/features/transit/`. The OpenAPI source used for reference is checked
-in at `openapi/motis.openapi.yaml`.
+The `motis-data` service imports MOTIS data before the MOTIS server starts. The
+backend reads `MOTIS_URL` and defaults to `http://localhost:8010` outside
+Compose. The Python integration uses `httpx` with a Pydantic request model
+mirroring the MOTIS OpenAPI `/api/v6/plan` query schema. The Flutter app uses
+`dio` with matching Dart request models under `app/lib/features/transit/`. The
+OpenAPI source used for reference is checked in at
+`openapi/motis.openapi.yaml`.
 
 ### Local development
 
