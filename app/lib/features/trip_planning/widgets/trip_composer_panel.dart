@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:material_duration_picker/material_duration_picker.dart';
 import 'package:watch_it/watch_it.dart';
 
 import '../../../_shared/models/geo_coordinate.dart';
@@ -820,11 +821,7 @@ class _DurationMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return DropdownButtonFormField<int>(
-      initialValue: _activityDurationOptions.contains(step.time.durationMinutes)
-          ? step.time.durationMinutes
-          : 60,
-      isExpanded: true,
+    return InputDecorator(
       decoration: const InputDecoration(
         isDense: true,
         prefixIcon: Icon(Icons.timer),
@@ -832,19 +829,23 @@ class _DurationMenu extends StatelessWidget {
         contentPadding: EdgeInsetsDirectional.only(end: 8),
         border: OutlineInputBorder(),
       ),
-      items: [
-        for (final duration in _activityDurationOptions)
-          DropdownMenuItem(
-            value: duration,
-            child: Text(_durationLabel(duration)),
-          ),
-      ],
-      onChanged: (duration) {
-        if (duration == null) return;
-        di<TripDraftManager>().updateStep(
-          step.copyWith(time: step.time.copyWith(durationMinutes: duration)),
-        );
-      },
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () async {
+          final result = await showDurationPicker(
+            context: context,
+            initialDuration: Duration(minutes: step.time.durationMinutes),
+            durationPickerMode: DurationPickerMode.hm,
+          );
+          if (result == null) return;
+          di<TripDraftManager>().updateStep(
+            step.copyWith(
+              time: step.time.copyWith(durationMinutes: result.inMinutes),
+            ),
+          );
+        },
+        child: Text(_durationLabel(step.time.durationMinutes)),
+      ),
     );
   }
 
@@ -949,24 +950,24 @@ class _ActivityPickerDialogState extends State<_ActivityPickerDialog> {
               onChanged: (value) => _details = value,
             ),
             const SizedBox(height: 16),
-            DropdownButtonFormField<int>(
-              initialValue: _durationMinutes,
+            InputDecorator(
               decoration: const InputDecoration(
                 labelText: 'Duration',
                 border: OutlineInputBorder(),
               ),
-              items: _activityDurationOptions
-                  .map(
-                    (duration) => DropdownMenuItem(
-                      value: duration,
-                      child: Text(_DurationMenu._durationLabel(duration)),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) {
-                if (value == null) return;
-                setState(() => _durationMinutes = value);
-              },
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () async {
+                  final result = await showDurationPicker(
+                    context: context,
+                    initialDuration: Duration(minutes: _durationMinutes),
+                    durationPickerMode: DurationPickerMode.hm,
+                  );
+                  if (result == null) return;
+                  setState(() => _durationMinutes = result.inMinutes);
+                },
+                child: Text(_DurationMenu._durationLabel(_durationMinutes)),
+              ),
             ),
             const SizedBox(height: 16),
             Wrap(
