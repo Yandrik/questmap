@@ -24,6 +24,20 @@ MOTIS_TARGETARCH=arm64 docker compose build
 
 ## Prepare Data
 
+For the root Docker Compose stack and Coolify deployments, prefer the
+Compose-native data service:
+
+```sh
+cd ..
+./prepare.sh
+```
+
+That writes to persistent Docker volumes and avoids nested Docker bind mounts.
+
+The local development script below writes into `motis/data` on the host and uses
+a nested `docker run` for `osmium merge`, so it is not suitable as a Coolify
+pre-build command.
+
 This downloads the two Geofabrik OSM extracts, downloads GTFS.DE Germany Full,
 merges the OSM extracts into `data/by-bw.osm.pbf`, and prepares
 `data/valhalla/by-bw.osm.pbf` for the root Docker Compose Valhalla service.

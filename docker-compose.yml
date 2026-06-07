@@ -13,9 +13,12 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      - surrealdb
-      - valhalla
-      - motis
+      surrealdb:
+        condition: service_started
+      valhalla:
+        condition: service_started
+      motis:
+        condition: service_started
 
   surrealdb:
     image: surrealdb/surrealdb:latest-dev
@@ -45,7 +48,10 @@ services:
     ports:
       - "8002:8002"
     volumes:
-      - ./motis/data/valhalla:/custom_files
+      - valhalla-data:/custom_files
+    depends_on:
+      motis-data:
+        condition: service_healthy
 
   motis:
     build:
@@ -57,7 +63,34 @@ services:
     ports:
       - "${MOTIS_PORT:-8010}:8080"
     volumes:
-      - ./motis/data:/data:ro
+      - motis-data:/data:ro
+    depends_on:
+      motis-data:
+        condition: service_healthy
+
+  motis-data:
+    build:
+      context: ./motis
+      dockerfile: Dockerfile.data
+      args:
+        MOTIS_VERSION: ${MOTIS_RELEASE:-v2.10.2}
+        TARGETARCH: ${MOTIS_TARGETARCH:-amd64}
+    environment:
+      DATA_SERVICE_KEEP_ALIVE: ${DATA_SERVICE_KEEP_ALIVE:-true}
+      FORCE_DATA_REFRESH: ${FORCE_DATA_REFRESH:-false}
+    volumes:
+      - motis-data:/data
+      - valhalla-data:/valhalla
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test -f /data/.motis-imported && test -s /valhalla/by-bw.osm.pbf
+      interval: 30s
+      timeout: 5s
+      retries: 720
+      start_period: 30s
 
 volumes:
+  motis-data:
+  valhalla-data:
   surrealdb-data:
