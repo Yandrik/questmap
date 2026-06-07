@@ -20,7 +20,7 @@ timetable:
 
 street_routing: true
 osr_footpath: true
-geocoding: false
+geocoding: true
 reverse_geocoding: false
 
 limits:
