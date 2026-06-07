@@ -4,8 +4,8 @@ services:
       context: ./backend
     environment:
       SURREALDB_URL: ws://surrealdb:8000
-      SURREALDB_NAMESPACE: questmap
-      SURREALDB_DATABASE: questmap
+      SURREALDB_NAMESPACE: main
+      SURREALDB_DATABASE: main
       SURREALDB_USERNAME: root
       SURREALDB_PASSWORD: root
       VALHALLA_URL: http://valhalla:8002
