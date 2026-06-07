@@ -115,6 +115,14 @@ class ItineraryStepDraft(BaseModel):
     color_value: int | None = None
 
 
+class TripRouteSegment(BaseModel):
+    model_config = _api_config
+
+    transport_mode: TransportMode
+    geometry: list[GeoCoordinate] = Field(default_factory=list)
+    description: str | None = None
+
+
 class TripPlanItem(BaseModel):
     model_config = _api_config
 
@@ -129,7 +137,9 @@ class TripPlanItem(BaseModel):
     start_time: datetime | None = None
     end_time: datetime | None = None
     location: GeoCoordinate | None = None
+    visual_target: LocationConstraint | None = None
     geometry: list[GeoCoordinate] = Field(default_factory=list)
+    segments: list[TripRouteSegment] = Field(default_factory=list)
 
 
 class TripPlan(BaseModel):

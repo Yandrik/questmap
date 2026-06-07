@@ -22,6 +22,18 @@ class MapStyleConfig {
       'meander-draft-location-area-fill';
   static const draftLocationAreaStrokeLayerId =
       'meander-draft-location-area-stroke';
+  static const tripRouteCompletedSourceId = 'meander-trip-route-completed';
+  static const tripRouteCompletedLayerId = 'meander-trip-route-completed-line';
+  static const tripRouteFutureSourceId = 'meander-trip-route-future';
+  static const tripRouteFutureLayerId = 'meander-trip-route-future-line';
+  static const tripRouteActiveSourceId = 'meander-trip-route-active';
+  static const tripRouteActiveLayerId = 'meander-trip-route-active-line';
+  static const tripActivityAreaSourceId = 'meander-trip-activity-area';
+  static const tripActivityAreaFillLayerId = 'meander-trip-activity-area-fill';
+  static const tripActivityAreaStrokeLayerId =
+      'meander-trip-activity-area-stroke';
+  static const tripActivityPointSourceId = 'meander-trip-activity-point';
+  static const tripActivityPointLayerId = 'meander-trip-activity-point-circle';
 
   static const interactiveLayerIds = <String>[
     'poi-icons-priority',

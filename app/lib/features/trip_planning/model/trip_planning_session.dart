@@ -24,8 +24,23 @@ class TripPlanningRequest {
     'startLocation': startLocation.toJson(),
     if (endLocation != null) 'endLocation': endLocation!.toJson(),
     'transportModes': transportModes.map((mode) => mode.apiValue).toList(),
-    'steps': steps.map((step) => step.toJson()).toList(),
+    'steps': _stepsJson(),
   };
+
+  List<Map<String, Object?>> _stepsJson() {
+    if (steps.isEmpty) return const [];
+
+    return [
+      steps.first
+          .copyWith(
+            time: steps.first.time.startTime == null
+                ? steps.first.time.copyWith(startTime: DateTime.now().toUtc())
+                : steps.first.time,
+          )
+          .toJson(),
+      ...steps.skip(1).map((step) => step.toJson()),
+    ];
+  }
 }
 
 enum TripPlanningQuestionKind {

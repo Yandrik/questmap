@@ -1,0 +1,7 @@
+SURREALDB_URL=ws://localhost:8001
+SURREALDB_NAMESPACE=main
+SURREALDB_DATABASE=main
+SURREALDB_USERNAME=root
+SURREALDB_PASSWORD=root
+
+BACKENDPOINT_URL = 'https://superblock69420mcserver.duckdns.org/meander/v1'

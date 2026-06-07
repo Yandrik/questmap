@@ -17,6 +17,7 @@ from trip_planning_models import (
     GeoCoordinate,
     ItineraryStepDraft,
     ItineraryStepType,
+    LocationConstraint,
     TransportMode,
     TripPlan,
     TripPlanItem,
@@ -25,6 +26,7 @@ from trip_planning_models import (
     TripPlanningQuestion,
     TripPlanningRequest,
     TripPlanningSessionSnapshot,
+    TripRouteSegment,
 )
 from valhalla import (
     CostingType,
@@ -84,6 +86,7 @@ class RouteCandidate:
     distance_meters: float | None
     geometry: list[GeoCoordinate]
     description: str
+    segments: list[TripRouteSegment]
 
 
 class TripPlanningRepository(Protocol):
@@ -519,6 +522,7 @@ class TripPlanner:
                         start_time=travel_start,
                         end_time=travel_end,
                         geometry=route.geometry,
+                        segments=route.segments,
                     )
                 )
                 current_time = travel_end
@@ -539,6 +543,7 @@ class TripPlanner:
                     start_time=activity_start,
                     end_time=activity_end,
                     location=activity_location,
+                    visual_target=_visual_target_for_step(step),
                     geometry=[],
                 )
             )
@@ -565,6 +570,7 @@ class TripPlanner:
                     start_time=current_time,
                     end_time=current_time + timedelta(seconds=route.duration_seconds),
                     geometry=route.geometry,
+                    segments=route.segments,
                 )
             )
 
@@ -680,6 +686,13 @@ class TripPlanner:
             distance_meters=None if length_km is None else length_km * 1000,
             geometry=geometry,
             description=_route_description(mode, duration, length_km),
+            segments=[
+                TripRouteSegment(
+                    transport_mode=mode,
+                    geometry=geometry,
+                    description=_route_description(mode, duration, length_km),
+                )
+            ],
         )
 
     async def _route_with_motis(
@@ -717,12 +730,21 @@ class TripPlanner:
             duration = _motis_legs_duration(legs)
         distance = _motis_legs_distance(legs)
         geometry = _coordinates_from_motis_legs(legs)
+        segments = _segments_from_motis_legs(legs)
         return RouteCandidate(
             mode="publicTransport",
             duration_seconds=duration,
             distance_meters=distance,
             geometry=geometry,
             description=_motis_description(legs, duration),
+            segments=segments
+            or [
+                TripRouteSegment(
+                    transport_mode="publicTransport",
+                    geometry=geometry,
+                    description=_motis_description(legs, duration),
+                )
+            ],
         )
 
 
@@ -842,6 +864,12 @@ def _activity_reasoning(
     return f"Selected {label} for the requested {step.type} stop."
 
 
+def _visual_target_for_step(step: ItineraryStepDraft) -> LocationConstraint | None:
+    if step.location.type in {"exactPoint", "aroundPoint", "areaCircle"}:
+        return step.location
+    return None
+
+
 def _category_filter(step_type: ItineraryStepType) -> PoiCategoryFilter | None:
     return {
         "eat": PoiCategoryFilter(
@@ -898,6 +926,16 @@ def _route_description(
     return f"{mode} route{distance}, about {_minutes(duration_seconds)} min."
 
 
+def _transport_mode_label(mode: TransportMode) -> str:
+    if mode == "walk":
+        return "Walk"
+    if mode == "bike":
+        return "Bike"
+    if mode == "drive":
+        return "Drive"
+    return "Public transport"
+
+
 def _motis_description(legs: Any, duration_seconds: int) -> str:
     names: list[str] = []
     if isinstance(legs, list):
@@ -942,6 +980,25 @@ def _coordinates_from_motis_legs(raw_legs: Any) -> list[GeoCoordinate]:
     return coordinates
 
 
+def _segments_from_motis_legs(raw_legs: Any) -> list[TripRouteSegment]:
+    if not isinstance(raw_legs, list):
+        return []
+    segments: list[TripRouteSegment] = []
+    for raw_leg in raw_legs:
+        leg = _dict_value(raw_leg)
+        if leg is None:
+            continue
+        mode = _transport_mode_from_motis(_str_value(leg.get("mode")))
+        segments.append(
+            TripRouteSegment(
+                transport_mode=mode,
+                geometry=_coordinates_from_motis_geometry(leg.get("legGeometry")),
+                description=_motis_leg_description(leg, mode),
+            )
+        )
+    return segments
+
+
 def _motis_legs_duration(raw_legs: Any) -> int:
     if not isinstance(raw_legs, list):
         return 0
@@ -972,6 +1029,29 @@ def _coordinates_from_motis_geometry(value: Any) -> list[GeoCoordinate]:
     if not points:
         return []
     return _decode_polyline(points, precision)
+
+
+def _transport_mode_from_motis(mode: str | None) -> TransportMode:
+    if mode == "WALK":
+        return "walk"
+    if mode in {"BIKE", "RENTAL"}:
+        return "bike"
+    if mode in {"CAR", "CAR_PARKING", "CAR_DROPOFF"}:
+        return "drive"
+    return "publicTransport"
+
+
+def _motis_leg_description(leg: dict[str, Any], mode: TransportMode) -> str:
+    name = (
+        _str_value(leg.get("displayName"))
+        or _str_value(leg.get("routeShortName"))
+        or _str_value(leg.get("routeLongName"))
+        or _transport_mode_label(mode)
+    )
+    duration = _int_value(leg.get("duration"))
+    if duration is None:
+        return name
+    return f"{name}, about {_minutes(duration)} min."
 
 
 def _coordinates_from_any(value: Any) -> list[GeoCoordinate]:

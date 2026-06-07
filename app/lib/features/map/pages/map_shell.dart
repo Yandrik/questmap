@@ -18,6 +18,8 @@ import '../../trip_planning/manager/trip_agent_manager.dart';
 import '../../trip_planning/manager/trip_draft_manager.dart';
 import '../../trip_planning/manager/trip_plan_manager.dart';
 import '../../trip_planning/model/pending_trip_location_pick.dart';
+import '../../trip_planning/model/trip_plan.dart';
+import '../../trip_planning/widgets/active_trip_card.dart';
 import '../../trip_planning/widgets/trip_composer_panel.dart';
 import '../../trip_planning/widgets/trip_planning_overlay.dart';
 import '../manager/map_interaction_manager.dart';
@@ -30,6 +32,7 @@ import '../services/map_icon_registry.dart';
 import '../services/map_route_overlay.dart';
 import '../services/map_selection_overlay.dart';
 import '../services/map_style_config.dart';
+import '../services/map_trip_plan_overlay.dart';
 import '../widgets/location_button.dart';
 import '../widgets/map_title_badge.dart';
 import '../widgets/target_details_panel.dart';
@@ -51,10 +54,13 @@ class _MapShellState extends State<MapShell> {
   final _selectionOverlay = MapSelectionOverlay();
   final _routeOverlay = MapRouteOverlay();
   final _draftLocationOverlay = MapDraftLocationOverlay();
+  final _tripPlanOverlay = MapTripPlanOverlay();
 
   MapLibreMapController? _controller;
   bool _isTripComposerOpen = false;
   String? _lastDraftLocationPreviewKey;
+  String? _lastTripOverlayKey;
+  String? _lastFittedTripKey;
 
   @override
   void initState() {
@@ -77,6 +83,7 @@ class _MapShellState extends State<MapShell> {
     await _selectionOverlay.addSelectionLayer(controller);
     await _routeOverlay.addRouteLayers(controller);
     await _draftLocationOverlay.addDraftLocationLayers(controller);
+    await _tripPlanOverlay.addTripPlanLayers(controller);
 
     final selectedTarget = di<MapSelectionManager>().selectedTarget;
     if (selectedTarget != null) {
@@ -87,6 +94,7 @@ class _MapShellState extends State<MapShell> {
     }
     await _syncRouteOverlay();
     await _syncDraftLocationOverlay();
+    await _syncTripPlanOverlay();
   }
 
   Future<void> _onMapClick(math.Point<double> point, LatLng coordinates) async {
@@ -336,9 +344,11 @@ class _MapShellState extends State<MapShell> {
   void _onUserLocationUpdated(UserLocation location) {
     final locationManager = di<LocationManager>();
     final shouldCenter = !locationManager.hasCenteredOnUserLocation;
-    locationManager.updateUserLocation(
-      _toGeoCoordinate(location.position, 'My Location'),
-    );
+    final coordinate = _toGeoCoordinate(location.position, 'My Location');
+    locationManager.updateUserLocation(coordinate);
+    if (di<TripPlanManager>().maybeMarkArrived(coordinate)) {
+      unawaited(_syncTripPlanOverlay());
+    }
 
     if (shouldCenter) {
       _goToUserLocation();
@@ -436,6 +446,59 @@ class _MapShellState extends State<MapShell> {
     );
   }
 
+  Future<void> _syncTripPlanOverlay() async {
+    final controller = _controller;
+    if (controller == null) return;
+    final manager = di<TripPlanManager>();
+    await _tripPlanOverlay.setTripPlan(
+      controller: controller,
+      plan: manager.currentPlan,
+      completedItemIds: manager.completedItemIds,
+      currentItemId: manager.currentItemId,
+      isTripActive: manager.isTripActive,
+    );
+    await _fitTripPlanIfNeeded(manager);
+  }
+
+  void _queueTripPlanOverlaySync(TripPlanManager manager) {
+    final completedItemIds = manager.completedItemIds.toList()..sort();
+    final key = [
+      manager.currentPlan?.id ?? 'none',
+      manager.isTripActive,
+      manager.currentItemId ?? 'none',
+      ...completedItemIds,
+    ].join(':');
+    if (_lastTripOverlayKey == key) return;
+    _lastTripOverlayKey = key;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_syncTripPlanOverlay());
+    });
+  }
+
+  Future<void> _fitTripPlanIfNeeded(TripPlanManager manager) async {
+    final plan = manager.currentPlan;
+    final controller = _controller;
+    if (plan == null || controller == null) {
+      _lastFittedTripKey = null;
+      return;
+    }
+    final fitKey = '${plan.id}:${manager.isTripActive ? 'active' : 'preview'}';
+    if (_lastFittedTripKey == fitKey) return;
+    final bounds = _tripPlanBounds(plan);
+    if (bounds == null) return;
+    _lastFittedTripKey = fitKey;
+    await controller.animateCamera(
+      CameraUpdate.newLatLngBounds(
+        bounds,
+        left: 42,
+        top: 96,
+        right: 42,
+        bottom: manager.isTripActive ? 230 : 120,
+      ),
+    );
+  }
+
   void _startNavigation() {
     di<RoutingManager>().startNavigation();
   }
@@ -473,8 +536,10 @@ class _MapShellState extends State<MapShell> {
     final routingManager = watchIt<RoutingManager>();
     final agentManager = watchIt<TripAgentManager>();
     final tripDraftManager = watchIt<TripDraftManager>();
+    final tripPlanManager = watchIt<TripPlanManager>();
     final pendingPick = tripDraftManager.pendingLocationPick;
     final isPickingTripLocation = pendingPick != null;
+    final isActiveTrip = tripPlanManager.isTripActive;
     final isRouting = watch(
       routingManager.requestRoutesCommand.isRunning,
     ).value;
@@ -502,9 +567,12 @@ class _MapShellState extends State<MapShell> {
         : const [0.26, 0.5];
     final topOrnamentInset = media.padding.top + _topMapOrnamentMargin;
     final bottomControlInset = isWide
-        ? media.padding.bottom + _mapControlMargin
+        ? media.padding.bottom + (isActiveTrip ? 184 : _mapControlMargin)
+        : isActiveTrip
+        ? media.padding.bottom + 184
         : media.size.height * mobileSheetInitialSize + _mapControlMargin;
     _queueDraftLocationOverlaySync(pendingPick);
+    _queueTripPlanOverlaySync(tripPlanManager);
 
     return Scaffold(
       body: Stack(
@@ -573,7 +641,7 @@ class _MapShellState extends State<MapShell> {
               ),
             ),
           ),
-          if (isWide)
+          if (!isActiveTrip && isWide)
             Positioned(
               top: 12,
               right: 12,
@@ -600,7 +668,7 @@ class _MapShellState extends State<MapShell> {
                       onStopNavigation: _stopNavigation,
                     ),
             )
-          else
+          else if (!isActiveTrip)
             Positioned.fill(
               child: SafeArea(
                 top: false,
@@ -656,7 +724,7 @@ class _MapShellState extends State<MapShell> {
                 ),
               ),
             ),
-          if (isWide && pendingPick != null)
+          if (!isActiveTrip && isWide && pendingPick != null)
             Positioned(
               left: 12,
               right: _isTripComposerOpen ? 454 : 384,
@@ -670,6 +738,18 @@ class _MapShellState extends State<MapShell> {
                 onCancel: () => unawaited(_cancelTripLocationPick()),
                 onConfirmArea: () => unawaited(_confirmTripAreaPick()),
                 onRadiusChanged: _updateTripAreaRadius,
+              ),
+            ),
+          if (isActiveTrip)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 560),
+                  child: const ActiveTripCard(),
+                ),
               ),
             ),
           if (agentManager.isPlanning)
@@ -711,6 +791,50 @@ String _targetDisplayLabel(SelectedMapTarget target) {
 LatLng? _toLatLng(GeoCoordinate? coordinate) {
   if (coordinate == null) return null;
   return LatLng(coordinate.lat, coordinate.lon);
+}
+
+LatLngBounds? _tripPlanBounds(TripPlan plan) {
+  final coordinates = <GeoCoordinate>[];
+  for (final item in plan.items) {
+    coordinates.addAll(item.geometry);
+    for (final segment in item.segments) {
+      coordinates.addAll(segment.geometry);
+    }
+    if (item.location != null) {
+      coordinates.add(item.location!);
+    }
+    final target = item.visualTarget;
+    if (target?.point != null) {
+      coordinates.add(target!.point!);
+    }
+    if (target?.center != null) {
+      coordinates.add(target!.center!);
+    }
+  }
+  if (coordinates.isEmpty) return null;
+
+  var minLat = coordinates.first.lat;
+  var maxLat = coordinates.first.lat;
+  var minLon = coordinates.first.lon;
+  var maxLon = coordinates.first.lon;
+  for (final coordinate in coordinates.skip(1)) {
+    minLat = math.min(minLat, coordinate.lat);
+    maxLat = math.max(maxLat, coordinate.lat);
+    minLon = math.min(minLon, coordinate.lon);
+    maxLon = math.max(maxLon, coordinate.lon);
+  }
+  if ((maxLat - minLat).abs() < 0.001) {
+    minLat -= 0.0005;
+    maxLat += 0.0005;
+  }
+  if ((maxLon - minLon).abs() < 0.001) {
+    minLon -= 0.0005;
+    maxLon += 0.0005;
+  }
+  return LatLngBounds(
+    southwest: LatLng(minLat, minLon),
+    northeast: LatLng(maxLat, maxLon),
+  );
 }
 
 IconData _transportIcon(TransportMode mode) {

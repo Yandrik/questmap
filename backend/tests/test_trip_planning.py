@@ -74,8 +74,113 @@ async def test_trip_planning_service_emits_route_complete_final_plan() -> None:
         GeoCoordinate(lat=48.4, lon=9.99),
         GeoCoordinate(lat=48.401, lon=9.991),
     ]
+    assert len(travel.segments) == 1
+    assert travel.segments[0].transport_mode == "walk"
+    activity = snapshot.final_plan.items[1]
+    assert activity.visual_target is not None
+    assert activity.visual_target.type == "exactPoint"
     assert "event: finalPlan" in "".join(frames)
     assert frames[-1].startswith("event: done")
+
+
+@pytest.mark.asyncio
+async def test_trip_planning_service_preserves_activity_visual_targets() -> None:
+    repository = _FakeTripPlanningRepository()
+    service = TripPlanningService(
+        repository,
+        _FakeValhallaClient(),
+        _FakeMotisClient(),
+    )
+
+    session_id = await service.start_session(
+        TripPlanningRequest(
+            draft_id="draft-1",
+            start_location=GeoCoordinate(lat=48.4, lon=9.99, label="Start"),
+            transport_modes=["walk"],
+            steps=[
+                ItineraryStepDraft(
+                    id="step-1",
+                    type="shop",
+                    title="Shop",
+                    details="books",
+                    time=TimeConstraint(duration_minutes=30),
+                    location=LocationConstraint(
+                        type="aroundPoint",
+                        point=GeoCoordinate(lat=48.401, lon=9.991),
+                    ),
+                ),
+                ItineraryStepDraft(
+                    id="step-2",
+                    type="sightsee",
+                    title="Sightsee",
+                    details="views",
+                    time=TimeConstraint(duration_minutes=30),
+                    location=LocationConstraint(
+                        type="areaCircle",
+                        center=GeoCoordinate(lat=48.402, lon=9.992),
+                        radius_meters=800,
+                    ),
+                ),
+            ],
+        )
+    )
+
+    await _collect_sse_until_done(service, session_id)
+    snapshot = await service.get_session(session_id)
+    await service.close()
+
+    assert snapshot.final_plan is not None
+    activities = [item for item in snapshot.final_plan.items if item.type == "activity"]
+    assert [item.visual_target.type for item in activities if item.visual_target] == [
+        "aroundPoint",
+        "areaCircle",
+    ]
+    assert activities[1].visual_target is not None
+    assert activities[1].visual_target.radius_meters == 800
+
+
+@pytest.mark.asyncio
+async def test_trip_planning_service_preserves_motis_segment_modes() -> None:
+    repository = _FakeTripPlanningRepository()
+    service = TripPlanningService(
+        repository,
+        _FakeValhallaClient(),
+        _SegmentedMotisClient(),
+    )
+
+    session_id = await service.start_session(
+        TripPlanningRequest(
+            draft_id="draft-1",
+            start_location=GeoCoordinate(lat=48.4, lon=9.99, label="Start"),
+            transport_modes=["publicTransport"],
+            steps=[
+                ItineraryStepDraft(
+                    id="step-1",
+                    type="eat",
+                    title="Eat",
+                    details="lunch",
+                    time=TimeConstraint(duration_minutes=45),
+                    location=LocationConstraint(
+                        type="exactPoint",
+                        point=GeoCoordinate(lat=48.401, lon=9.991),
+                    ),
+                )
+            ],
+        )
+    )
+
+    await _collect_sse_until_done(service, session_id)
+    snapshot = await service.get_session(session_id)
+    await service.close()
+
+    assert snapshot.final_plan is not None
+    travel = snapshot.final_plan.items[0]
+    assert travel.type == "travel"
+    assert travel.transport_mode == "publicTransport"
+    assert [segment.transport_mode for segment in travel.segments] == [
+        "walk",
+        "publicTransport",
+    ]
 
 
 @pytest.mark.asyncio
@@ -312,6 +417,30 @@ class _FailingValhallaClient:
 class _FakeMotisClient:
     async def plan(self, plan_request: Any) -> dict[str, Any]:
         return {"itineraries": []}
+
+
+class _SegmentedMotisClient:
+    async def plan(self, plan_request: Any) -> dict[str, Any]:
+        return {
+            "itineraries": [
+                {
+                    "duration": 720,
+                    "legs": [
+                        {
+                            "mode": "WALK",
+                            "duration": 120,
+                            "distance": 180,
+                        },
+                        {
+                            "mode": "BUS",
+                            "duration": 600,
+                            "distance": 2200,
+                            "routeShortName": "7",
+                        },
+                    ],
+                }
+            ]
+        }
 
 
 def _json_model(model: Any) -> dict[str, Any]:

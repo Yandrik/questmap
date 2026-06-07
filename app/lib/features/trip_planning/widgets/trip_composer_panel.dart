@@ -126,7 +126,10 @@ class TripComposerPanel extends WatchingWidget {
                       ),
                       if (planManager.currentPlan != null) ...[
                         const SizedBox(height: 10),
-                        _TripPlanSection(planManager: planManager),
+                        _TripPlanSection(
+                          planManager: planManager,
+                          onStarted: onClose,
+                        ),
                       ],
                       Row(
                         children: [
@@ -308,9 +311,10 @@ class _InsertStepButton extends StatelessWidget {
 }
 
 class _TripPlanSection extends StatelessWidget {
-  const _TripPlanSection({required this.planManager});
+  const _TripPlanSection({required this.planManager, required this.onStarted});
 
   final TripPlanManager planManager;
+  final VoidCallback onStarted;
 
   @override
   Widget build(BuildContext context) {
@@ -338,15 +342,7 @@ class _TripPlanSection extends StatelessWidget {
                     ),
                   ),
                 ),
-                TextButton.icon(
-                  onPressed: planManager.isTripActive
-                      ? planManager.stopTrip
-                      : planManager.startTrip,
-                  icon: Icon(
-                    planManager.isTripActive ? Icons.stop : Icons.play_arrow,
-                  ),
-                  label: Text(planManager.isTripActive ? 'Stop' : 'Start'),
-                ),
+                Icon(Icons.checklist, color: theme.colorScheme.primary),
               ],
             ),
             if (plan.summary != null)
@@ -358,12 +354,32 @@ class _TripPlanSection extends StatelessWidget {
                 shrinkWrap: true,
                 children: [
                   for (final item in plan.items)
-                    _TripPlanItemTile(
-                      item: item,
-                      isDone: planManager.completedItemIds.contains(item.id),
-                    ),
+                    _TripPlanItemReviewTile(item: item),
                 ],
               ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => di<TripPlanManager>().rejectPlan(),
+                    icon: const Icon(Icons.close),
+                    label: const Text('Reject'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      di<TripPlanManager>().startTrip();
+                      onStarted();
+                    },
+                    icon: const Icon(Icons.play_arrow),
+                    label: const Text('Start'),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -372,11 +388,10 @@ class _TripPlanSection extends StatelessWidget {
   }
 }
 
-class _TripPlanItemTile extends StatelessWidget {
-  const _TripPlanItemTile({required this.item, required this.isDone});
+class _TripPlanItemReviewTile extends StatelessWidget {
+  const _TripPlanItemReviewTile({required this.item});
 
   final TripPlanItem item;
-  final bool isDone;
 
   @override
   Widget build(BuildContext context) {
@@ -385,21 +400,14 @@ class _TripPlanItemTile extends StatelessWidget {
         ? item.description
         : '${item.description}\nReasoning: ${item.reasoning}';
 
-    return CheckboxListTile(
+    return ListTile(
       dense: true,
       contentPadding: EdgeInsets.zero,
-      value: isDone,
-      onChanged: (_) => di<TripPlanManager>().toggleItemDone(item.id),
-      title: Text(
-        item.title,
-        style: theme.textTheme.bodyMedium?.copyWith(
-          decoration: isDone ? TextDecoration.lineThrough : null,
-        ),
-      ),
-      subtitle: Text(subtitle, maxLines: 4, overflow: TextOverflow.ellipsis),
-      secondary: Icon(
+      leading: Icon(
         item.type == TripPlanItemType.travel ? Icons.route : Icons.place,
       ),
+      title: Text(item.title, style: theme.textTheme.bodyMedium),
+      subtitle: Text(subtitle, maxLines: 4, overflow: TextOverflow.ellipsis),
     );
   }
 }
@@ -698,6 +706,22 @@ class _StartTimeButton extends StatelessWidget {
   }
 }
 
+const _activityDurationOptions = [
+  5,
+  10,
+  15,
+  20,
+  25,
+  30,
+  45,
+  60,
+  90,
+  120,
+  150,
+  180,
+  240,
+];
+
 class _DurationMenu extends StatelessWidget {
   const _DurationMenu({required this.step});
 
@@ -705,9 +729,8 @@ class _DurationMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const durations = [30, 45, 60, 90, 120, 150, 180, 240];
     return DropdownButtonFormField<int>(
-      initialValue: durations.contains(step.time.durationMinutes)
+      initialValue: _activityDurationOptions.contains(step.time.durationMinutes)
           ? step.time.durationMinutes
           : 60,
       isExpanded: true,
@@ -719,7 +742,7 @@ class _DurationMenu extends StatelessWidget {
         border: OutlineInputBorder(),
       ),
       items: [
-        for (final duration in durations)
+        for (final duration in _activityDurationOptions)
           DropdownMenuItem(
             value: duration,
             child: Text(_durationLabel(duration)),
@@ -841,7 +864,7 @@ class _ActivityPickerDialogState extends State<_ActivityPickerDialog> {
                 labelText: 'Duration',
                 border: OutlineInputBorder(),
               ),
-              items: const [30, 45, 60, 90, 120, 150, 180, 240]
+              items: _activityDurationOptions
                   .map(
                     (duration) => DropdownMenuItem(
                       value: duration,
@@ -902,7 +925,7 @@ class _ActivityPickerDialogState extends State<_ActivityPickerDialog> {
           TextButton(
             onPressed: () =>
                 Navigator.of(context).pop(_selectedTargetResult(target)),
-            child: const Text('Selected'),
+            child: const Text('Use selected target'),
           ),
         FilledButton(
           onPressed: () => Navigator.of(context).pop(_primaryResult()),
@@ -911,7 +934,7 @@ class _ActivityPickerDialogState extends State<_ActivityPickerDialog> {
                 ? isEditing
                       ? 'Save'
                       : 'Add'
-                : 'Pick where',
+                : 'Pick on map',
           ),
         ),
       ],

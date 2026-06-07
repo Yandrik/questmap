@@ -15,6 +15,7 @@ import 'package:meander/features/trip_planning/manager/trip_plan_manager.dart';
 import 'package:meander/features/trip_planning/model/itinerary_step_draft.dart';
 import 'package:meander/features/trip_planning/model/location_constraint.dart';
 import 'package:meander/features/trip_planning/model/pending_trip_location_pick.dart';
+import 'package:meander/features/trip_planning/model/trip_plan.dart';
 import 'package:meander/features/trip_planning/services/trip_planning_api_service.dart';
 import 'package:meander/features/trip_planning/widgets/trip_composer_panel.dart';
 
@@ -299,11 +300,43 @@ void main() {
     final step = di<TripDraftManager>().draft!.steps.single;
     expect(step.location.point!.label, 'Museum (48.398000, 9.992000)');
   });
+
+  testWidgets('keeps returned plan in composer until started', (tester) async {
+    var closed = false;
+    await di<TripPlanManager>().setPlan(_reviewPlan());
+
+    await _pumpPanel(tester, onClose: () => closed = true);
+
+    expect(find.text('Review trip'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Start'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, 'Reject'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Start'));
+    await tester.pump();
+
+    expect(di<TripPlanManager>().isTripActive, isTrue);
+    expect(closed, isTrue);
+  });
+
+  testWidgets('rejects returned plan and stays in editable composer', (
+    tester,
+  ) async {
+    await di<TripPlanManager>().setPlan(_reviewPlan());
+
+    await _pumpPanel(tester);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Reject'));
+    await tester.pump();
+
+    expect(di<TripPlanManager>().currentPlan, isNull);
+    expect(find.text('Add activity'), findsOneWidget);
+  });
 }
 
 Future<void> _pumpPanel(
   WidgetTester tester, {
   SelectedMapTarget? selectedTarget,
+  VoidCallback? onClose,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -313,11 +346,27 @@ Future<void> _pumpPanel(
           height: 720,
           child: TripComposerPanel(
             selectedTarget: selectedTarget,
-            onClose: () {},
+            onClose: onClose ?? () {},
           ),
         ),
       ),
     ),
   );
   await tester.pumpAndSettle();
+}
+
+TripPlan _reviewPlan() {
+  return const TripPlan(
+    id: 'plan-1',
+    title: 'Review trip',
+    summary: '1 planned stop with routed travel legs.',
+    items: [
+      TripPlanItem(
+        id: 'activity-1',
+        type: TripPlanItemType.activity,
+        title: 'Shop',
+        description: 'books',
+      ),
+    ],
+  );
 }

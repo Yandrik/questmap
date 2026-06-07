@@ -1,6 +1,7 @@
 import '../../../_shared/models/geo_coordinate.dart';
 import '../../../_shared/models/transport_mode.dart';
 import 'itinerary_step_draft.dart';
+import 'location_constraint.dart';
 
 enum TripPlanItemType {
   activity('activity'),
@@ -64,11 +65,14 @@ class TripPlanItem {
     this.startTime,
     this.endTime,
     this.location,
+    this.visualTarget,
     this.geometry = const [],
+    this.segments = const [],
   });
 
   factory TripPlanItem.fromJson(Map<String, Object?> json) {
     final rawGeometry = json['geometry'];
+    final rawSegments = json['segments'];
     return TripPlanItem(
       id: json['id'] as String,
       type: TripPlanItemType.fromApiValue(json['type'] as String),
@@ -87,9 +91,17 @@ class TripPlanItem {
       location: json['location'] == null
           ? null
           : GeoCoordinate.fromJson(_map(json['location'])),
+      visualTarget: json['visualTarget'] == null
+          ? null
+          : LocationConstraint.fromJson(_map(json['visualTarget'])),
       geometry: rawGeometry is List
           ? rawGeometry
                 .map((coordinate) => GeoCoordinate.fromJson(_map(coordinate)))
+                .toList()
+          : const [],
+      segments: rawSegments is List
+          ? rawSegments
+                .map((segment) => TripRouteSegment.fromJson(_map(segment)))
                 .toList()
           : const [],
     );
@@ -106,7 +118,9 @@ class TripPlanItem {
   final DateTime? startTime;
   final DateTime? endTime;
   final GeoCoordinate? location;
+  final LocationConstraint? visualTarget;
   final List<GeoCoordinate> geometry;
+  final List<TripRouteSegment> segments;
 
   Map<String, Object?> toJson() => {
     'id': id,
@@ -120,6 +134,42 @@ class TripPlanItem {
     if (startTime != null) 'startTime': startTime!.toIso8601String(),
     if (endTime != null) 'endTime': endTime!.toIso8601String(),
     if (location != null) 'location': location!.toJson(),
+    if (visualTarget != null) 'visualTarget': visualTarget!.toJson(),
+    'geometry': geometry.map((coordinate) => coordinate.toJson()).toList(),
+    if (segments.isNotEmpty)
+      'segments': segments.map((segment) => segment.toJson()).toList(),
+  };
+}
+
+class TripRouteSegment {
+  const TripRouteSegment({
+    required this.transportMode,
+    this.geometry = const [],
+    this.description,
+  });
+
+  factory TripRouteSegment.fromJson(Map<String, Object?> json) {
+    final rawGeometry = json['geometry'];
+    return TripRouteSegment(
+      transportMode: TransportMode.fromApiValue(
+        json['transportMode'] as String,
+      ),
+      description: json['description'] as String?,
+      geometry: rawGeometry is List
+          ? rawGeometry
+                .map((coordinate) => GeoCoordinate.fromJson(_map(coordinate)))
+                .toList()
+          : const [],
+    );
+  }
+
+  final TransportMode transportMode;
+  final List<GeoCoordinate> geometry;
+  final String? description;
+
+  Map<String, Object?> toJson() => {
+    'transportMode': transportMode.apiValue,
+    if (description != null) 'description': description,
     'geometry': geometry.map((coordinate) => coordinate.toJson()).toList(),
   };
 }
