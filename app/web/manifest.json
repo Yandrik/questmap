@@ -1,6 +1,6 @@
 {
-    "name": "questmap_app",
-    "short_name": "questmap_app",
+    "name": "meander",
+    "short_name": "meander",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

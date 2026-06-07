@@ -1,5 +1,3 @@
-import 'package:dio/dio.dart';
-
 enum ValhallaCosting {
   auto('auto'),
   bicycle('bicycle'),
@@ -25,6 +23,16 @@ enum ValhallaShapeFormat {
   noShape('no_shape');
 
   const ValhallaShapeFormat(this.value);
+
+  final String value;
+}
+
+enum ValhallaDirectionsType {
+  none('none'),
+  maneuvers('maneuvers'),
+  instructions('instructions');
+
+  const ValhallaDirectionsType(this.value);
 
   final String value;
 }
@@ -56,6 +64,8 @@ class ValhallaRouteRequest {
     this.costing = ValhallaCosting.pedestrian,
     this.costingOptions,
     this.directionsOptions,
+    this.alternates,
+    this.directionsType,
     this.shapeFormat = ValhallaShapeFormat.polyline6,
     this.units = 'kilometers',
     this.language,
@@ -65,6 +75,8 @@ class ValhallaRouteRequest {
   final ValhallaCosting costing;
   final Map<String, Object?>? costingOptions;
   final Map<String, Object?>? directionsOptions;
+  final int? alternates;
+  final ValhallaDirectionsType? directionsType;
   final ValhallaShapeFormat shapeFormat;
   final String units;
   final String? language;
@@ -83,29 +95,11 @@ class ValhallaRouteRequest {
       'costing': costing.value,
       if (costingOptions != null) 'costing_options': costingOptions,
       if (directionsOptions != null) 'directions_options': directionsOptions,
+      if (alternates != null) 'alternates': alternates,
+      if (directionsType != null) 'directions_type': directionsType!.value,
       'shape_format': shapeFormat.value,
       'units': units,
       if (language != null) 'language': language,
     };
-  }
-}
-
-class ValhallaClient {
-  ValhallaClient({String baseUrl = 'http://localhost:8002', Dio? dio})
-    : _dio = dio ?? Dio(BaseOptions(baseUrl: baseUrl));
-
-  final Dio _dio;
-
-  Future<Map<String, dynamic>> status() async {
-    final response = await _dio.get<Map<String, dynamic>>('/status');
-    return response.data ?? <String, dynamic>{};
-  }
-
-  Future<Map<String, dynamic>> route(ValhallaRouteRequest request) async {
-    final response = await _dio.post<Map<String, dynamic>>(
-      '/route',
-      data: request.toJson(),
-    );
-    return response.data ?? <String, dynamic>{};
   }
 }

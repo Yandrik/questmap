@@ -1,4 +1,4 @@
-name: questmap_app
+name: meander
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
@@ -38,7 +38,16 @@ dependencies:
   iconify_flutter: ^0.0.7
   maplibre_gl:
     path: /home/yannik/Documents/Codex/2026-06-05/maplibre-flutter-maplibre-gl-git-https/maplibre_gl
+  permission_handler: ^12.0.3
   dio: ^5.9.2
+  get_it: ^9.2.1
+  watch_it: ^2.4.2
+  listen_it: ^5.3.5
+  command_it: ^9.5.1
+  drift: ^2.33.0
+  sqlite3_flutter_libs: ^0.6.0+eol
+  path_provider: ^2.1.5
+  path: ^1.9.1
 
 dependency_overrides:
   maplibre_gl_platform_interface:
@@ -56,6 +65,8 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  drift_dev: ^2.33.0
+  build_runner: ^2.15.0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

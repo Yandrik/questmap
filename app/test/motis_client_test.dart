@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:questmap_app/motis_client.dart';
+import 'package:meander/features/transit/model/motis_plan_request.dart';
 
 void main() {
   test('serializes a plan request using MOTIS OpenAPI query names', () {

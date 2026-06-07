@@ -1,5 +1,3 @@
-import 'package:dio/dio.dart';
-
 enum MotisMode {
   walk('WALK'),
   bike('BIKE'),
@@ -221,28 +219,66 @@ class MotisPlanRequest {
     if (algorithm != null) 'algorithm': algorithm!.value,
   };
 
+  Map<String, Object?> toJson() => {
+    'fromPlace': fromPlace,
+    'toPlace': toPlace,
+    if (radius != null) 'radius': radius,
+    if (via != null) 'via': via,
+    if (viaMinimumStay != null) 'viaMinimumStay': viaMinimumStay,
+    if (time != null) 'time': time!.toIso8601String(),
+    if (maxTransfers != null) 'maxTransfers': maxTransfers,
+    if (maxTravelTime != null) 'maxTravelTime': maxTravelTime,
+    if (minTransferTime != null) 'minTransferTime': minTransferTime,
+    if (additionalTransferTime != null)
+      'additionalTransferTime': additionalTransferTime,
+    if (transferTimeFactor != null) 'transferTimeFactor': transferTimeFactor,
+    if (maxMatchingDistance != null) 'maxMatchingDistance': maxMatchingDistance,
+    if (pedestrianProfile != null)
+      'pedestrianProfile': pedestrianProfile!.value,
+    if (pedestrianSpeed != null) 'pedestrianSpeed': pedestrianSpeed,
+    if (cyclingSpeed != null) 'cyclingSpeed': cyclingSpeed,
+    if (elevationCosts != null) 'elevationCosts': elevationCosts!.value,
+    if (useRoutedTransfers != null) 'useRoutedTransfers': useRoutedTransfers,
+    if (detailedTransfers != null) 'detailedTransfers': detailedTransfers,
+    if (detailedLegs != null) 'detailedLegs': detailedLegs,
+    if (joinInterlinedLegs != null) 'joinInterlinedLegs': joinInterlinedLegs,
+    if (transitModes != null)
+      'transitModes': transitModes!.map((mode) => mode.value).toList(),
+    if (directModes != null)
+      'directModes': directModes!.map((mode) => mode.value).toList(),
+    if (preTransitModes != null)
+      'preTransitModes': preTransitModes!.map((mode) => mode.value).toList(),
+    if (postTransitModes != null)
+      'postTransitModes': postTransitModes!.map((mode) => mode.value).toList(),
+    if (numItineraries != null) 'numItineraries': numItineraries,
+    if (maxItineraries != null) 'maxItineraries': maxItineraries,
+    if (pageCursor != null) 'pageCursor': pageCursor,
+    if (timetableView != null) 'timetableView': timetableView,
+    if (arriveBy != null) 'arriveBy': arriveBy,
+    if (searchWindow != null) 'searchWindow': searchWindow,
+    if (requireBikeTransport != null)
+      'requireBikeTransport': requireBikeTransport,
+    if (requireCarTransport != null) 'requireCarTransport': requireCarTransport,
+    if (maxPreTransitTime != null) 'maxPreTransitTime': maxPreTransitTime,
+    if (maxPostTransitTime != null) 'maxPostTransitTime': maxPostTransitTime,
+    if (maxDirectTime != null) 'maxDirectTime': maxDirectTime,
+    if (fastestDirectFactor != null) 'fastestDirectFactor': fastestDirectFactor,
+    if (timeout != null) 'timeout': timeout,
+    if (passengers != null) 'passengers': passengers,
+    if (luggage != null) 'luggage': luggage,
+    if (slowDirect != null) 'slowDirect': slowDirect,
+    if (fastestSlowDirectFactor != null)
+      'fastestSlowDirectFactor': fastestSlowDirectFactor,
+    if (withFares != null) 'withFares': withFares,
+    if (numLegAlternatives != null) 'numLegAlternatives': numLegAlternatives,
+    if (withScheduledSkippedStops != null)
+      'withScheduledSkippedStops': withScheduledSkippedStops,
+    if (language != null) 'language': language,
+    if (algorithm != null) 'algorithm': algorithm!.value,
+  };
+
   static String _join(Iterable<Object> values) => values.join(',');
 
   static String _joinModes(Iterable<MotisMode> modes) =>
       modes.map((mode) => mode.value).join(',');
-}
-
-class MotisClient {
-  MotisClient({String baseUrl = 'http://localhost:8010', Dio? dio})
-    : _dio = dio ?? Dio(BaseOptions(baseUrl: baseUrl));
-
-  final Dio _dio;
-
-  Future<Map<String, dynamic>> health() async {
-    final response = await _dio.get<Map<String, dynamic>>('/api/v1/health');
-    return response.data ?? <String, dynamic>{};
-  }
-
-  Future<Map<String, dynamic>> plan(MotisPlanRequest request) async {
-    final response = await _dio.get<Map<String, dynamic>>(
-      '/api/v6/plan',
-      queryParameters: request.toQueryParameters(),
-    );
-    return response.data ?? <String, dynamic>{};
-  }
 }
