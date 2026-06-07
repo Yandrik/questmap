@@ -264,6 +264,17 @@ class TripDraftManager extends ChangeNotifier {
     _changed();
   }
 
+  Future<void> resetDraft() async {
+    _draft = null;
+    _pendingLocationPick = null;
+    _isLoaded = false;
+    notifyListeners();
+    await _persistenceService.deleteJson(
+      namespace: _namespace,
+      id: _activeDraftId,
+    );
+  }
+
   Future<void> saveNow() => _save();
 
   TripDraft _requireDraft() {

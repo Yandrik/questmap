@@ -33,6 +33,30 @@ class TripComposerPanel extends WatchingWidget {
     final manager = watchIt<TripDraftManager>();
     final planManager = watchIt<TripPlanManager>();
     final agentManager = watchIt<TripAgentManager>();
+    final lastShownPlanningError = createOnce(
+      () => ValueNotifier<String?>(null),
+    );
+    registerChangeNotifierHandler<TripAgentManager>(
+      target: agentManager,
+      handler: (context, manager, cancel) {
+        final error = manager.errorMessage;
+        if (error == null) {
+          lastShownPlanningError.value = null;
+          return;
+        }
+        if (lastShownPlanningError.value == error) return;
+        lastShownPlanningError.value = error;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Trip planning failed: $error'),
+            action: SnackBarAction(
+              label: 'Dismiss',
+              onPressed: manager.clearError,
+            ),
+          ),
+        );
+      },
+    );
     final draft = manager.draft;
     final theme = Theme.of(context);
 
@@ -50,7 +74,7 @@ class TripComposerPanel extends WatchingWidget {
                 : Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _Header(onClose: onClose),
+                      _Header(onClose: onClose, onReset: _resetDraft),
                       const SizedBox(height: 12),
                       _TransportModeSelector(draft: draft),
                       const SizedBox(height: 12),
@@ -129,6 +153,13 @@ class TripComposerPanel extends WatchingWidget {
                         _TripPlanSection(
                           planManager: planManager,
                           onStarted: onClose,
+                        ),
+                      ],
+                      if (agentManager.errorMessage != null) ...[
+                        const SizedBox(height: 10),
+                        _PlanningErrorBanner(
+                          message: agentManager.errorMessage!,
+                          onDismiss: agentManager.clearError,
                         ),
                       ],
                       Row(
@@ -275,6 +306,60 @@ class TripComposerPanel extends WatchingWidget {
     );
     return nextStart.difference(currentEnd).inMinutes > 30;
   }
+
+  Future<void> _resetDraft() async {
+    await di<TripDraftManager>().resetDraft();
+    di<MapInteractionManager>().setMode(MapInteractionMode.browse);
+    onClose();
+  }
+}
+
+class _PlanningErrorBanner extends StatelessWidget {
+  const _PlanningErrorBanner({required this.message, required this.onDismiss});
+
+  final String message;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.errorContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              Icons.error_outline,
+              color: theme.colorScheme.onErrorContainer,
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                message,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onErrorContainer,
+                ),
+              ),
+            ),
+            IconButton(
+              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+              padding: EdgeInsets.zero,
+              tooltip: 'Dismiss planning error',
+              onPressed: onDismiss,
+              icon: const Icon(Icons.close, size: 18),
+              color: theme.colorScheme.onErrorContainer,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _InsertStepButton extends StatelessWidget {
@@ -413,9 +498,10 @@ class _TripPlanItemReviewTile extends StatelessWidget {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.onClose});
+  const _Header({required this.onClose, required this.onReset});
 
   final VoidCallback onClose;
+  final VoidCallback onReset;
 
   @override
   Widget build(BuildContext context) {
@@ -432,6 +518,11 @@ class _Header extends StatelessWidget {
               fontWeight: FontWeight.w700,
             ),
           ),
+        ),
+        IconButton(
+          tooltip: 'Reset trip draft',
+          onPressed: onReset,
+          icon: const Icon(Icons.restart_alt),
         ),
         IconButton(
           tooltip: 'Close',

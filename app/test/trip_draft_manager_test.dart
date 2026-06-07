@@ -42,6 +42,43 @@ void main() {
     expect(restored.draft!.steps.single.time.durationMinutes, 90);
   });
 
+  test('resets active draft and deletes persisted record', () async {
+    final manager = TripDraftManager(persistence);
+    await manager.ensureDraft(
+      startLocation: const GeoCoordinate(lat: 48.4, lon: 9.99),
+    );
+    manager.addStep(
+      type: ItineraryStepType.shop,
+      details: 'clothes',
+      location: LocationConstraint.wherever(),
+    );
+    manager.beginLocationPick(
+      index: 0,
+      type: ItineraryStepType.walk,
+      details: 'parks',
+      durationMinutes: 60,
+      kind: TripLocationPickKind.aroundPoint,
+    );
+    await manager.saveNow();
+
+    await manager.resetDraft();
+
+    expect(manager.draft, isNull);
+    expect(manager.pendingLocationPick, isNull);
+    expect(manager.isLoaded, isFalse);
+    expect(
+      await persistence.getJson(namespace: 'tripDrafts', id: 'active'),
+      isNull,
+    );
+
+    final fresh = TripDraftManager(persistence);
+    await fresh.ensureDraft(
+      startLocation: const GeoCoordinate(lat: 48.5, lon: 10.0),
+    );
+    expect(fresh.draft!.startLocation.lat, 48.5);
+    expect(fresh.draft!.steps, isEmpty);
+  });
+
   test('inserts steps at any index and appends through addStep', () async {
     final manager = TripDraftManager(persistence);
     await manager.ensureDraft(
