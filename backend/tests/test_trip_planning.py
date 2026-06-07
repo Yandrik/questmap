@@ -2,18 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
 from trip_planning import (
+    AgentTripPlanner,
     InvalidAnswerError,
     PoiCandidate,
     RoutePlanningError,
     SessionNotFoundError,
     StaleAnswerError,
     StoredPlanningEvent,
+    TripPlanner,
     TripPlanningService,
 )
 from trip_planning_models import (
@@ -34,6 +36,7 @@ async def test_trip_planning_service_emits_route_complete_final_plan() -> None:
         repository,
         _FakeValhallaClient(),
         _FakeMotisClient(),
+        use_agent=False,
     )
 
     session_id = await service.start_session(
@@ -90,6 +93,7 @@ async def test_trip_planning_service_preserves_activity_visual_targets() -> None
         repository,
         _FakeValhallaClient(),
         _FakeMotisClient(),
+        use_agent=False,
     )
 
     session_id = await service.start_session(
@@ -146,6 +150,7 @@ async def test_trip_planning_service_preserves_motis_segment_modes() -> None:
         repository,
         _FakeValhallaClient(),
         _SegmentedMotisClient(),
+        use_agent=False,
     )
 
     session_id = await service.start_session(
@@ -181,6 +186,61 @@ async def test_trip_planning_service_preserves_motis_segment_modes() -> None:
         "walk",
         "publicTransport",
     ]
+    walk_details = travel.segments[0].transit_details
+    assert walk_details is not None
+    assert walk_details.to_label == "Stop A"
+    assert walk_details.instructions == ["Turn right on Main Street for 120 m"]
+    bus_details = travel.segments[1].transit_details
+    assert bus_details is not None
+    assert bus_details.vehicle_type == "Bus"
+    assert bus_details.route_short_name == "7"
+    assert bus_details.headsign == "Downtown"
+    assert bus_details.agency_name == "Transit Agency"
+    assert bus_details.start_time == datetime.fromisoformat("2026-06-07T10:05:00+00:00")
+    assert bus_details.real_time is True
+    assert bus_details.cancelled is False
+    assert bus_details.intermediate_stop_labels == ["Middle A", "Middle B"]
+
+
+@pytest.mark.asyncio
+async def test_trip_planning_service_clamps_stale_start_time_for_motis() -> None:
+    repository = _FakeTripPlanningRepository()
+    motis = _RecordingMotisClient()
+    service = TripPlanningService(
+        repository,
+        _FakeValhallaClient(),
+        motis,
+        use_agent=False,
+    )
+    stale_start = datetime.now(UTC) - timedelta(days=2)
+
+    session_id = await service.start_session(
+        TripPlanningRequest(
+            draft_id="draft-1",
+            start_location=GeoCoordinate(lat=48.4, lon=9.99, label="Start"),
+            transport_modes=["publicTransport"],
+            steps=[
+                ItineraryStepDraft(
+                    id="step-1",
+                    type="eat",
+                    title="Eat",
+                    details="lunch",
+                    time=TimeConstraint(start_time=stale_start, duration_minutes=45),
+                    location=LocationConstraint(
+                        type="exactPoint",
+                        point=GeoCoordinate(lat=48.401, lon=9.991),
+                    ),
+                )
+            ],
+        )
+    )
+
+    await _collect_sse_until_done(service, session_id)
+    await service.close()
+
+    assert motis.last_plan_request is not None
+    assert motis.last_plan_request.time is not None
+    assert motis.last_plan_request.time > stale_start
 
 
 @pytest.mark.asyncio
@@ -190,6 +250,7 @@ async def test_trip_planning_service_fails_when_no_mode_can_route() -> None:
         repository,
         _FailingValhallaClient(),
         _FakeMotisClient(),
+        use_agent=False,
     )
 
     session_id = await service.start_session(
@@ -229,6 +290,7 @@ async def test_trip_planning_service_direct_walks_nearby_unroutable_legs() -> No
         repository,
         _FailingValhallaClient(),
         _FakeMotisClient(),
+        use_agent=False,
     )
 
     session_id = await service.start_session(
@@ -273,6 +335,7 @@ async def test_trip_planning_service_does_not_direct_walk_local_unroutable_legs(
         repository,
         _FailingValhallaClient(),
         _FakeMotisClient(),
+        use_agent=False,
     )
 
     session_id = await service.start_session(
@@ -314,6 +377,7 @@ async def test_answer_question_validates_current_question() -> None:
         repository,
         _FakeValhallaClient(),
         _FakeMotisClient(),
+        use_agent=False,
     )
     request = TripPlanningRequest(
         draft_id="draft-1",
@@ -364,6 +428,235 @@ async def test_answer_question_validates_current_question() -> None:
     assert repository.events["session-1"][-1].payload.type == "status"
 
 
+@pytest.mark.asyncio
+async def test_trip_planning_service_uses_agent_unless_no_agent_is_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _FakeTripPlanningRepository()
+    monkeypatch.delenv("NO_AGENT", raising=False)
+
+    service = TripPlanningService(
+        repository,
+        _FakeValhallaClient(),
+        _FakeMotisClient(),
+    )
+    assert isinstance(service._planner, AgentTripPlanner)
+    await service.close()
+
+    monkeypatch.setenv("NO_AGENT", "true")
+    service = TripPlanningService(
+        repository,
+        _FakeValhallaClient(),
+        _FakeMotisClient(),
+    )
+    assert isinstance(service._planner, TripPlanner)
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_trip_planner_converts_agent_output_to_trip_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pydantic_ai_local
+    from pydantic_ai_local import (
+        LocationGeometry,
+        LocationProperties,
+        LocationsObject,
+        TripPlanOutput,
+    )
+
+    repository = _FakeTripPlanningRepository()
+    request = TripPlanningRequest(
+        draft_id="draft-1",
+        start_location=GeoCoordinate(lat=48.4, lon=9.99),
+        transport_modes=["walk"],
+        steps=[
+            ItineraryStepDraft(
+                id="step-1",
+                type="eat",
+                title="Eat",
+                details="vegan noodles",
+                time=TimeConstraint(duration_minutes=45),
+                location=LocationConstraint(
+                    type="areaCircle",
+                    center=GeoCoordinate(lat=48.401, lon=9.991, label="Ulm"),
+                    radius_meters=900,
+                ),
+            )
+        ],
+    )
+    await repository.create_session("session-1", request, datetime.now(UTC))
+
+    async def fake_plan_trip(
+        inp: Any,
+        session_id: str | None = None,
+        ask_user: Any = None,
+    ) -> TripPlanOutput:
+        assert session_id == "session-1"
+        assert ask_user is not None
+        assert inp.trip_locations[0].city == "Ulm"
+        assert inp.trip_locations[0].category == "restaurant"
+        return TripPlanOutput(
+            summary="Agent-picked restaurant.",
+            start_point=(48.4, 9.99),
+            end_point=(48.4, 9.99),
+            ordered_points=[
+                LocationsObject(
+                    type="Feature",
+                    geometry=LocationGeometry(
+                        type="Point",
+                        coordinates=(9.992, 48.402),
+                    ),
+                    properties=LocationProperties(name="Rice House"),
+                )
+            ],
+            route_strategy="Selected from user preferences.",
+        )
+
+    monkeypatch.setattr(pydantic_ai_local, "plan_trip", fake_plan_trip)
+    planner = AgentTripPlanner(repository, lambda *args: None)
+
+    plan = await planner.build_plan("session-1")
+
+    assert plan.summary == "Agent-picked restaurant."
+    assert plan.items[0].title == "Rice House"
+    assert plan.items[0].location == GeoCoordinate(
+        lat=48.402,
+        lon=9.992,
+        label="Rice House",
+    )
+    assert plan.items[0].visual_target is not None
+    assert plan.items[0].visual_target.type == "exactPoint"
+
+
+@pytest.mark.asyncio
+async def test_ask_user_emits_question_and_waits_for_answer() -> None:
+    repository = _FakeTripPlanningRepository()
+    service = TripPlanningService(
+        repository,
+        _FakeValhallaClient(),
+        _FakeMotisClient(),
+        use_agent=False,
+    )
+    request = TripPlanningRequest(
+        draft_id="draft-1",
+        start_location=GeoCoordinate(lat=48.4, lon=9.99),
+        transport_modes=["walk"],
+        steps=[
+            ItineraryStepDraft(
+                id="step-1",
+                type="eat",
+                title="Eat",
+                details="Chinese",
+                time=TimeConstraint(duration_minutes=60),
+                location=LocationConstraint(type="wherever"),
+            )
+        ],
+    )
+    await repository.create_session("session-1", request, datetime.now(UTC))
+
+    ask_task = asyncio.create_task(
+        service.ask_user(
+            "session-1",
+            "selection",
+            "Choose a restaurant",
+            [
+                {"osm_id": 123, "name": "Rice House", "distance_m": 45},
+                "fallback",
+            ],
+        )
+    )
+
+    question_frame = await _collect_sse_until_question(service, "session-1")
+    snapshot = await service.get_session("session-1")
+    assert snapshot.state == "waitingForAnswer"
+    assert snapshot.current_question is not None
+    assert snapshot.current_question.prompt == "Choose a restaurant"
+    assert snapshot.current_question.options[0].id == "123"
+    assert snapshot.current_question.options[0].title == "Rice House"
+    assert snapshot.current_question.options[0].payload == {
+        "osm_id": 123,
+        "name": "Rice House",
+        "distance_m": 45,
+    }
+    assert "event: question" in question_frame
+
+    await service.answer_question(
+        "session-1",
+        _answer(snapshot.current_question.id, ["123", "fallback"]),
+    )
+    answer = await asyncio.wait_for(ask_task, timeout=1)
+    await service.close()
+
+    assert answer == ["123", "fallback"]
+
+
+@pytest.mark.asyncio
+async def test_ask_user_serializes_concurrent_questions() -> None:
+    repository = _FakeTripPlanningRepository()
+    service = TripPlanningService(
+        repository,
+        _FakeValhallaClient(),
+        _FakeMotisClient(),
+        use_agent=False,
+    )
+    request = TripPlanningRequest(
+        draft_id="draft-1",
+        start_location=GeoCoordinate(lat=48.4, lon=9.99),
+        transport_modes=["walk"],
+        steps=[
+            ItineraryStepDraft(
+                id="step-1",
+                type="eat",
+                title="Eat",
+                details="Chinese",
+                time=TimeConstraint(duration_minutes=60),
+                location=LocationConstraint(type="wherever"),
+            )
+        ],
+    )
+    await repository.create_session("session-1", request, datetime.now(UTC))
+
+    first_task = asyncio.create_task(
+        service.ask_user("session-1", "text", "First question")
+    )
+    second_task = asyncio.create_task(
+        service.ask_user("session-1", "text", "Second question")
+    )
+
+    first_question = await _wait_for_current_question(service, "session-1")
+    assert first_question.prompt == "First question"
+    await service.answer_question(
+        "session-1",
+        _answer(first_question.id, "first answer"),
+    )
+
+    second_question = await _wait_for_current_question(
+        service,
+        "session-1",
+        previous_question_id=first_question.id,
+    )
+    assert second_question.prompt == "Second question"
+    await service.answer_question(
+        "session-1",
+        _answer(second_question.id, "second answer"),
+    )
+
+    assert await asyncio.wait_for(first_task, timeout=1) == "first answer"
+    assert await asyncio.wait_for(second_task, timeout=1) == "second answer"
+    question_events = [
+        event
+        for event in repository.events["session-1"]
+        if event.payload.type == "question"
+    ]
+    await service.close()
+
+    assert [event.payload.question.prompt for event in question_events] == [
+        "First question",
+        "Second question",
+    ]
+
+
 def test_trip_planning_request_validates_time_interval() -> None:
     with pytest.raises(ValueError, match="durationMinutes"):
         TimeConstraint(
@@ -383,6 +676,30 @@ async def _collect_sse_until_done(
             if frame.startswith("event: done"):
                 return frames
     return frames
+
+
+async def _collect_sse_until_question(
+    service: TripPlanningService, session_id: str
+) -> str:
+    async with asyncio.timeout(3):
+        async for frame in service.stream_events(session_id):
+            if frame.startswith("event: question"):
+                return frame
+    raise AssertionError("question event was not emitted")
+
+
+async def _wait_for_current_question(
+    service: TripPlanningService,
+    session_id: str,
+    previous_question_id: str | None = None,
+) -> Any:
+    async with asyncio.timeout(3):
+        while True:
+            snapshot = await service.get_session(session_id)
+            question = snapshot.current_question
+            if question is not None and question.id != previous_question_id:
+                return question
+            await asyncio.sleep(0)
 
 
 def _answer(question_id: str, value: Any) -> Any:
@@ -513,19 +830,53 @@ class _SegmentedMotisClient:
                     "legs": [
                         {
                             "mode": "WALK",
+                            "from": {"name": "Here"},
+                            "to": {"name": "Stop A"},
                             "duration": 120,
                             "distance": 180,
+                            "steps": [
+                                {
+                                    "relativeDirection": "RIGHT",
+                                    "streetName": "Main Street",
+                                    "distance": 120,
+                                }
+                            ],
                         },
                         {
                             "mode": "BUS",
+                            "from": {"name": "Stop A"},
+                            "to": {"name": "Stop B"},
                             "duration": 600,
                             "distance": 2200,
+                            "displayName": "7",
                             "routeShortName": "7",
+                            "routeLongName": "City Bus 7",
+                            "headsign": "Downtown",
+                            "agencyName": "Transit Agency",
+                            "startTime": "2026-06-07T10:05:00+00:00",
+                            "endTime": "2026-06-07T10:15:00+00:00",
+                            "scheduledStartTime": "2026-06-07T10:03:00+00:00",
+                            "scheduledEndTime": "2026-06-07T10:13:00+00:00",
+                            "realTime": True,
+                            "cancelled": False,
+                            "intermediateStops": [
+                                {"name": "Middle A"},
+                                {"name": "Middle B"},
+                            ],
                         },
                     ],
                 }
             ]
         }
+
+
+class _RecordingMotisClient(_SegmentedMotisClient):
+    def __init__(self) -> None:
+        self.last_plan_request: Any | None = None
+
+    async def plan(self, plan_request: Any) -> dict[str, Any]:
+        self.last_plan_request = plan_request
+        return await super().plan(plan_request)
 
 
 def _json_model(model: Any) -> dict[str, Any]:

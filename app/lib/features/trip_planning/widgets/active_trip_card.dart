@@ -72,6 +72,9 @@ class _TravelContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final destination = manager.destinationForCurrentTravel;
+    final transitSegments = item.segments
+        .where((segment) => segment.transitDetails != null)
+        .toList();
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -117,6 +120,10 @@ class _TravelContent extends StatelessWidget {
             ),
           ),
         ],
+        if (transitSegments.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          _TravelTransitLegs(segments: transitSegments),
+        ],
         const SizedBox(height: 10),
         Row(
           children: [
@@ -137,6 +144,68 @@ class _TravelContent extends StatelessWidget {
             ),
           ],
         ),
+      ],
+    );
+  }
+}
+
+class _TravelTransitLegs extends StatelessWidget {
+  const _TravelTransitLegs({required this.segments});
+
+  final List<TripRouteSegment> segments;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var index = 0; index < segments.length; index++) ...[
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                _modeIcon(segments[index].transportMode),
+                size: 18,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _segmentTitle(segments[index]),
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (_segmentMeta(segments[index]) case final meta?) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        meta,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                    if (_segmentStopCount(segments[index])
+                        case final stops?) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        stops,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (index != segments.length - 1) const SizedBox(height: 8),
+        ],
       ],
     );
   }
@@ -299,6 +368,75 @@ String _coordinateLabel(GeoCoordinate? coordinate) {
 String _radiusLabel(double meters) {
   if (meters >= 1000) return '${(meters / 1000).toStringAsFixed(1)} km';
   return '${meters.round()} m';
+}
+
+String _segmentTitle(TripRouteSegment segment) {
+  final details = segment.transitDetails;
+  final from = details?.fromLabel ?? 'Start';
+  final to = details?.toLabel ?? 'Destination';
+  if (segment.transportMode == TransportMode.walk) {
+    return 'Walk to $to';
+  }
+  if (segment.transportMode == TransportMode.publicTransport) {
+    final vehicle = _vehicleLabel(segment);
+    final toward = details?.headsign == null
+        ? ''
+        : ' toward ${details!.headsign}';
+    return 'Take $vehicle$toward from $from; get off at $to';
+  }
+  final verb = switch (segment.transportMode) {
+    TransportMode.bike => 'Bike',
+    TransportMode.drive => 'Drive',
+    TransportMode.walk => 'Walk',
+    TransportMode.publicTransport => 'Take transit',
+  };
+  return '$verb to $to';
+}
+
+String _vehicleLabel(TripRouteSegment segment) {
+  final details = segment.transitDetails;
+  final name = details?.vehicleLabel;
+  final type = details?.vehicleType;
+  if (type == null || type.isEmpty) {
+    return name ?? segment.transportMode.displayLabel;
+  }
+  if (name == null || name.isEmpty) return type;
+  if (name.toLowerCase().contains(type.toLowerCase())) return name;
+  return '$type $name';
+}
+
+String? _segmentMeta(TripRouteSegment segment) {
+  final details = segment.transitDetails;
+  if (details == null) return segment.description;
+  final timing = _timeRange(details.startTime, details.endTime);
+  final status = details.cancelled == true
+      ? 'Cancelled'
+      : details.realTime == true
+      ? 'Realtime'
+      : null;
+  final values = [?timing, ?status, ?segment.description];
+  if (values.isEmpty) return null;
+  return values.join(' · ');
+}
+
+String? _segmentStopCount(TripRouteSegment segment) {
+  final stops = segment.transitDetails?.intermediateStopLabels;
+  if (stops == null || stops.isEmpty) return null;
+  return '${stops.length} intermediate stops';
+}
+
+String? _timeRange(DateTime? start, DateTime? end) {
+  if (start == null && end == null) return null;
+  if (start == null) return 'Arrive ${_timeLabel(end!)}';
+  if (end == null) return 'Depart ${_timeLabel(start)}';
+  return '${_timeLabel(start)}-${_timeLabel(end)}';
+}
+
+String _timeLabel(DateTime value) {
+  final local = value.toLocal();
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
+  return '$hour:$minute';
 }
 
 IconData _modeIcon(TransportMode? mode) {

@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:watch_it/watch_it.dart';
 
 import 'package:meander/_shared/models/geo_coordinate.dart';
+import 'package:meander/_shared/models/transit_leg_details.dart';
 import 'package:meander/_shared/models/transport_mode.dart';
 import 'package:meander/_shared/services/local_persistence_service.dart';
 import 'package:meander/features/trip_planning/manager/trip_plan_manager.dart';
@@ -53,6 +54,26 @@ void main() {
 
     expect(di<TripPlanManager>().isTripActive, isFalse);
   });
+
+  testWidgets('shows public transport segment itinerary details', (
+    tester,
+  ) async {
+    await di<TripPlanManager>().setPlan(_transitPlan());
+    di<TripPlanManager>().startTrip();
+
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: ActiveTripCard())),
+    );
+    await tester.pump();
+
+    expect(find.text('Travel to Museum'), findsOneWidget);
+    expect(find.text('Walk to Stop A'), findsOneWidget);
+    expect(
+      find.text('Take Bus 7 toward Downtown from Stop A; get off at Stop B'),
+      findsOneWidget,
+    );
+    expect(find.text('2 intermediate stops'), findsOneWidget);
+  });
 }
 
 TripPlan _plan() {
@@ -87,6 +108,60 @@ TripPlan _plan() {
           center: const GeoCoordinate(lat: 48.401, lon: 9.991),
           radiusMeters: 800,
         ),
+      ),
+    ],
+  );
+}
+
+TripPlan _transitPlan() {
+  final start = DateTime.parse('2026-06-07T10:00:00Z');
+  return TripPlan(
+    id: 'plan-transit',
+    title: 'Transit trip',
+    items: [
+      TripPlanItem(
+        id: 'travel-1',
+        type: TripPlanItemType.travel,
+        title: 'Travel to Museum',
+        description: 'Bus 7, about 26 min.',
+        transportMode: TransportMode.publicTransport,
+        startTime: start,
+        endTime: start.add(const Duration(minutes: 26)),
+        segments: [
+          const TripRouteSegment(
+            transportMode: TransportMode.walk,
+            description: 'Walk, about 4 min.',
+            transitDetails: TransitLegDetails(
+              fromLabel: 'Here',
+              toLabel: 'Stop A',
+            ),
+          ),
+          TripRouteSegment(
+            transportMode: TransportMode.publicTransport,
+            description: 'Bus 7, about 20 min.',
+            transitDetails: TransitLegDetails(
+              fromLabel: 'Stop A',
+              toLabel: 'Stop B',
+              displayName: '7',
+              vehicleType: 'Bus',
+              headsign: 'Downtown',
+              startTime: start.add(const Duration(minutes: 5)),
+              endTime: start.add(const Duration(minutes: 25)),
+              realTime: true,
+              intermediateStopLabels: const ['Middle A', 'Middle B'],
+            ),
+          ),
+        ],
+      ),
+      TripPlanItem(
+        id: 'activity-1',
+        type: TripPlanItemType.activity,
+        title: 'Museum',
+        description: 'exhibits',
+        stepType: ItineraryStepType.sightsee,
+        startTime: start.add(const Duration(minutes: 26)),
+        endTime: start.add(const Duration(minutes: 86)),
+        location: const GeoCoordinate(lat: 48.401, lon: 9.991),
       ),
     ],
   );

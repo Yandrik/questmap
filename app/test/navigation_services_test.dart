@@ -89,8 +89,10 @@ void main() {
     expect(seenOptions!.path, '/transit/plan');
     expect(seenData, containsPair('fromPlace', '48.4,9.99'));
     expect(seenData, containsPair('toPlace', '48.5,10.0'));
+    expect(seenData, isNot(contains('time')));
     expect(seenData, containsPair('detailedLegs', true));
     expect(seenData, containsPair('detailedTransfers', true));
+    expect(seenData, containsPair('joinInterlinedLegs', false));
     expect(seenData, containsPair('transitModes', ['TRANSIT']));
     expect(candidates.single.mode, TransportMode.publicTransport);
   });

@@ -540,30 +540,48 @@ class _MapShellState extends State<MapShell> {
     final pendingPick = tripDraftManager.pendingLocationPick;
     final isPickingTripLocation = pendingPick != null;
     final isActiveTrip = tripPlanManager.isTripActive;
+    final hasSelectedTransitItinerary =
+        routingManager.selectedCandidate?.mode ==
+            TransportMode.publicTransport &&
+        (routingManager.selectedCandidate?.legs.isNotEmpty ?? false);
     final isRouting = watch(
       routingManager.requestRoutesCommand.isRunning,
     ).value;
+    registerHandler(
+      select: (RoutingManager manager) => manager.requestRoutesCommand.errors,
+      handler: (context, error, cancel) {
+        // _navigateToSelectedTarget awaits runAsync and shows the route snackbar.
+      },
+    );
     final media = MediaQuery.of(context);
     final isWide = media.size.width >= 720;
     final mobileSheetInitialSize = isPickingTripLocation
         ? 0.22
         : _isTripComposerOpen
         ? 0.86
+        : hasSelectedTransitItinerary
+        ? 0.58
         : 0.26;
     final mobileSheetMinSize = isPickingTripLocation
         ? 0.18
         : _isTripComposerOpen
         ? 0.55
+        : hasSelectedTransitItinerary
+        ? 0.32
         : 0.18;
     final mobileSheetMaxSize = isPickingTripLocation
         ? 0.32
         : _isTripComposerOpen
         ? 0.96
+        : hasSelectedTransitItinerary
+        ? 0.9
         : 0.5;
     final mobileSheetSnapSizes = isPickingTripLocation
         ? const [0.22, 0.32]
         : _isTripComposerOpen
         ? const [0.55, 0.86, 0.96]
+        : hasSelectedTransitItinerary
+        ? const [0.32, 0.58, 0.9]
         : const [0.26, 0.5];
     final topOrnamentInset = media.padding.top + _topMapOrnamentMargin;
     final bottomControlInset = isWide
@@ -674,7 +692,7 @@ class _MapShellState extends State<MapShell> {
                 top: false,
                 child: DraggableScrollableSheet(
                   key: ValueKey(
-                    'map-sheet-$_isTripComposerOpen-$isPickingTripLocation',
+                    'map-sheet-$_isTripComposerOpen-$isPickingTripLocation-$hasSelectedTransitItinerary',
                   ),
                   minChildSize: mobileSheetMinSize,
                   initialChildSize: mobileSheetInitialSize,

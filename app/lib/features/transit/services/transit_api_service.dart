@@ -17,6 +17,7 @@ class TransitApiService {
       time: request.departAt,
       detailedLegs: true,
       detailedTransfers: true,
+      joinInterlinedLegs: false,
       directModes: const [],
       preTransitModes: const [MotisMode.walk],
       postTransitModes: const [MotisMode.walk],

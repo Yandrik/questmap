@@ -155,6 +155,11 @@ void main() {
             {
               'transportMode': 'walk',
               'description': 'Walk',
+              'transitDetails': {
+                'fromLabel': 'Here',
+                'toLabel': 'Stop A',
+                'instructions': ['Continue for 80 m'],
+              },
               'geometry': [
                 {'lat': 48.4, 'lon': 9.99},
                 {'lat': 48.401, 'lon': 9.991},
@@ -173,6 +178,10 @@ void main() {
     expect(
       extendedPlan.items.last.segments.single.transportMode,
       TransportMode.walk,
+    );
+    expect(
+      extendedPlan.items.last.segments.single.transitDetails!.toLabel,
+      'Stop A',
     );
     expect(extendedPlan.toJson()['items'], isA<List<Object?>>());
   });

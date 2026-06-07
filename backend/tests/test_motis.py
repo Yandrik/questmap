@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
 from motis import MotisClient, MotisPlanRequest
+from main import _normalize_transit_plan_time, transit_plan
 
 
 @pytest.mark.asyncio
@@ -75,3 +77,59 @@ async def test_motis_client_reads_health() -> None:
     await http_client.aclose()
 
     assert response == {"status": "ok"}
+
+
+def test_transit_plan_time_uses_motis_default_now() -> None:
+    missing_time = _normalize_transit_plan_time(
+        MotisPlanRequest(fromPlace="48.4,9.99", toPlace="48.5,10.0")
+    )
+    assert missing_time.time is None
+
+    stale = datetime.now(UTC) - timedelta(days=2)
+    stale_time = _normalize_transit_plan_time(
+        MotisPlanRequest(
+            fromPlace="48.4,9.99",
+            toPlace="48.5,10.0",
+            time=stale,
+        )
+    )
+    assert stale_time.time is None
+
+    future = datetime.now(UTC) + timedelta(days=1)
+    future_time = _normalize_transit_plan_time(
+        MotisPlanRequest(
+            fromPlace="48.4,9.99",
+            toPlace="48.5,10.0",
+            time=future,
+        )
+    )
+    assert future_time.time is None
+
+
+@pytest.mark.asyncio
+async def test_transit_plan_endpoint_omits_time_for_motis_default_now() -> None:
+    motis = _RecordingMotisClient()
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(motis=motis)))
+    future = datetime.now(UTC) + timedelta(days=1)
+
+    response = await transit_plan(
+        MotisPlanRequest(
+            fromPlace="48.4,9.99",
+            toPlace="48.5,10.0",
+            time=future,
+        ),
+        request,
+    )
+
+    assert response["itineraries"] == []
+    assert motis.last_plan_request is not None
+    assert motis.last_plan_request.time is None
+
+
+class _RecordingMotisClient:
+    def __init__(self) -> None:
+        self.last_plan_request: MotisPlanRequest | None = None
+
+    async def plan(self, plan_request: MotisPlanRequest) -> dict[str, object]:
+        self.last_plan_request = plan_request
+        return {"itineraries": []}

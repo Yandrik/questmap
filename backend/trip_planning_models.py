@@ -115,12 +115,35 @@ class ItineraryStepDraft(BaseModel):
     color_value: int | None = None
 
 
+class TransitLegDetails(BaseModel):
+    model_config = _api_config
+
+    from_label: str | None = None
+    to_label: str | None = None
+    route_name: str | None = None
+    route_short_name: str | None = None
+    route_long_name: str | None = None
+    display_name: str | None = None
+    vehicle_type: str | None = None
+    headsign: str | None = None
+    agency_name: str | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    scheduled_start_time: datetime | None = None
+    scheduled_end_time: datetime | None = None
+    real_time: bool | None = None
+    cancelled: bool | None = None
+    intermediate_stop_labels: list[str] = Field(default_factory=list)
+    instructions: list[str] = Field(default_factory=list)
+
+
 class TripRouteSegment(BaseModel):
     model_config = _api_config
 
     transport_mode: TransportMode
     geometry: list[GeoCoordinate] = Field(default_factory=list)
     description: str | None = None
+    transit_details: TransitLegDetails | None = None
 
 
 class TripPlanItem(BaseModel):

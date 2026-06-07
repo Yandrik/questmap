@@ -45,6 +45,7 @@ class TargetDetailsPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final transitItineraryRoute = _transitItineraryRoute(selectedRoute);
 
     return SafeArea(
       child: Padding(
@@ -88,6 +89,13 @@ class TargetDetailsPanel extends StatelessWidget {
                                 candidates: routeCandidates,
                                 selectedRoute: selectedRoute,
                                 onSelectRoute: onSelectRoute,
+                              ),
+                            ],
+                            if (transitItineraryRoute != null) ...[
+                              const SizedBox(height: 8),
+                              _TransitItinerarySection(
+                                route: transitItineraryRoute,
+                                isNavigationActive: isNavigationActive,
                               ),
                             ],
                             const SizedBox(height: 12),
@@ -314,6 +322,214 @@ class _RouteCandidateTile extends StatelessWidget {
   }
 }
 
+class _TransitItinerarySection extends StatelessWidget {
+  const _TransitItinerarySection({
+    required this.route,
+    required this.isNavigationActive,
+  });
+
+  final NavigationCandidate route;
+  final bool isNavigationActive;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.directions_transit,
+                  size: 18,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    isNavigationActive
+                        ? 'Transit navigation'
+                        : 'Transit itinerary',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                Text(
+                  route.durationLabel,
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            _RouteLegList(legs: route.legs),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RouteLegList extends StatelessWidget {
+  const _RouteLegList({required this.legs});
+
+  final List<NavigationLeg> legs;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (var index = 0; index < legs.length; index++)
+            _RouteLegRow(
+              leg: legs[index],
+              isLast: index == legs.length - 1,
+              index: index + 1,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RouteLegRow extends StatelessWidget {
+  const _RouteLegRow({
+    required this.leg,
+    required this.isLast,
+    required this.index,
+  });
+
+  final NavigationLeg leg;
+  final bool isLast;
+  final int index;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final details = leg.transitDetails;
+    final title = _legTitle(leg);
+    final timing = _timeRange(details?.startTime, details?.endTime);
+    final status = _statusLabel(details?.realTime, details?.cancelled);
+    final distance = leg.distanceMeters == null
+        ? null
+        : _distanceLabel(leg.distanceMeters!);
+    final stopCount =
+        details != null && details.intermediateStopLabels.isNotEmpty
+        ? '${details.intermediateStopLabels.length} intermediate stops'
+        : null;
+    final meta = [
+      ?timing,
+      ?status,
+      _durationLabel(leg.durationSeconds),
+      ?distance,
+    ].join(' · ');
+    final notes = [
+      ?details?.agencyName,
+      ?stopCount,
+      ...?details?.instructions.take(2),
+    ];
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Column(
+          children: [
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primaryContainer,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: SizedBox.square(
+                dimension: 28,
+                child: Center(
+                  child: Text(
+                    '$index',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onPrimaryContainer,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            if (!isLast)
+              SizedBox(
+                width: 1,
+                height: notes.isEmpty ? 38 : 68,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.outlineVariant,
+                  ),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(bottom: isLast ? 0 : 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      _modeIcon(leg.mode),
+                      size: 18,
+                      color: theme.colorScheme.primary,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (meta.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    meta,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+                for (final note in notes) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    note,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _SheetHandle extends StatelessWidget {
   const _SheetHandle();
 
@@ -334,6 +550,93 @@ class _SheetHandle extends StatelessWidget {
       ),
     );
   }
+}
+
+String _legTitle(NavigationLeg leg) {
+  final details = leg.transitDetails;
+  final from = details?.fromLabel ?? leg.fromLabel;
+  final to = details?.toLabel ?? leg.toLabel;
+  if (leg.mode == TransportMode.walk) {
+    return 'Walk to $to';
+  }
+  if (leg.mode == TransportMode.publicTransport) {
+    final vehicle = _vehicleLabel(leg);
+    final toward = details?.headsign == null
+        ? ''
+        : ' toward ${details!.headsign}';
+    return 'Take $vehicle$toward from $from; get off at $to';
+  }
+  final verb = switch (leg.mode) {
+    TransportMode.bike => 'Bike',
+    TransportMode.drive => 'Drive',
+    TransportMode.walk => 'Walk',
+    TransportMode.publicTransport => 'Take transit',
+  };
+  return '$verb to $to';
+}
+
+String _vehicleLabel(NavigationLeg leg) {
+  final details = leg.transitDetails;
+  final name = details?.vehicleLabel ?? leg.displayName;
+  final type = details?.vehicleType;
+  if (type == null || type.isEmpty) {
+    return name ?? leg.mode.displayLabel;
+  }
+  if (name == null || name.isEmpty) return type;
+  if (name.toLowerCase().contains(type.toLowerCase())) return name;
+  return '$type $name';
+}
+
+String? _timeRange(DateTime? start, DateTime? end) {
+  if (start == null && end == null) return null;
+  if (start == null) return 'Arrive ${_timeLabel(end!)}';
+  if (end == null) return 'Depart ${_timeLabel(start)}';
+  return '${_timeLabel(start)}-${_timeLabel(end)}';
+}
+
+String _timeLabel(DateTime value) {
+  final local = value.toLocal();
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
+  return '$hour:$minute';
+}
+
+String? _statusLabel(bool? realTime, bool? cancelled) {
+  if (cancelled == true) return 'Cancelled';
+  if (realTime == true) return 'Realtime';
+  return null;
+}
+
+String _durationLabel(int durationSeconds) {
+  final minutes = (durationSeconds / 60).round();
+  if (minutes < 60) return '$minutes min';
+  final hours = minutes ~/ 60;
+  final rest = minutes % 60;
+  return rest == 0 ? '${hours}h' : '${hours}h ${rest}min';
+}
+
+String _distanceLabel(double distanceMeters) {
+  if (distanceMeters >= 1000) {
+    return '${(distanceMeters / 1000).toStringAsFixed(1)} km';
+  }
+  return '${distanceMeters.round()} m';
+}
+
+IconData _modeIcon(TransportMode mode) {
+  return switch (mode) {
+    TransportMode.walk => Icons.directions_walk,
+    TransportMode.bike => Icons.directions_bike,
+    TransportMode.drive => Icons.directions_car,
+    TransportMode.publicTransport => Icons.directions_transit,
+  };
+}
+
+NavigationCandidate? _transitItineraryRoute(NavigationCandidate? route) {
+  if (route == null || route.mode != TransportMode.publicTransport) {
+    return null;
+  }
+  if (route.legs.isEmpty) return null;
+  return route;
 }
 
 class _EmptyFeatureState extends StatelessWidget {

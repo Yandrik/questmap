@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from os import getenv
 from typing import Any, Literal
+
 from dotenv import load_dotenv
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from pydantic_ai import Agent, BinaryContent
+from pydantic_ai import Agent, BinaryContent, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 from surrealdb import AsyncSurreal
@@ -95,6 +97,19 @@ class TripPlanOutput(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+PromptType = Literal["yesNo", "number", "text", "selection", "routeChoice"]
+AskUserCallback = Callable[
+    [
+        str,
+        PromptType,
+        str,
+        list[str | dict[str, Any]] | None,
+    ],
+    Awaitable[Any],
+]
+AskUserCallbackOrNone = AskUserCallback | None
+
+
 @dataclass(frozen=True)
 class Deps:
     db_url: str
@@ -102,6 +117,8 @@ class Deps:
     db_name: str
     db_user: str
     db_pass: str
+    session_id: str | None = None
+    ask_user: AskUserCallbackOrNone = None
 
 
 async def search_pois(
@@ -173,15 +190,35 @@ async def search_closest_city(
     return json.dumps(filtered_result, ensure_ascii=False)
 
 
-# Use Literal for the allowed prompt types
-async def prompt_user(prompt_type: Literal['yesNo', 'number', 'text', 'selection', 'routeChoice'], message: str, suggestions: list[str | dict[str, Any]] | None = None) -> str:
-# [bool, int, str, list[str | object]]:
+async def prompt_user(
+    ctx: RunContext[Deps],
+    prompt_type: PromptType,
+    message: str,
+    suggestions: list[str | dict[str, Any]] | None = None,
+) -> str:
     """Non-blocking placeholder for agent clarification prompts."""
-    print(f"Prompting user {prompt_type}: {message},\n{suggestions}")
-    return f"Question deferred to API workflow: {message}\nJust use the first object in the list of suggestions as the answer to the question."
+    if ctx.deps.ask_user is None or ctx.deps.session_id is None:
+        print(f"Prompting user {prompt_type}: {message},\n{suggestions}")
+        return (
+            f"Question deferred to API workflow: {message}\n"
+            "Just use the first object in the list of suggestions as the answer "
+            "to the question."
+        )
+
+    answer = await ctx.deps.ask_user(
+        ctx.deps.session_id,
+        prompt_type,
+        message,
+        suggestions,
+    )
+    return json.dumps(answer, ensure_ascii=False)
 
 
-async def plan_trip(inp: TripPlanInput) -> TripPlanOutput:
+async def plan_trip(
+    inp: TripPlanInput,
+    session_id: str | None = None,
+    ask_user: AskUserCallbackOrNone = None,
+) -> TripPlanOutput:
     agent = _build_agent()
     prompt = _planning_prompt(inp)
     result = await agent.run(
@@ -192,6 +229,8 @@ async def plan_trip(inp: TripPlanInput) -> TripPlanOutput:
             db_name=getenv("SURREALDB_DATABASE", "main"),
             db_user=getenv("SURREALDB_USERNAME", "root"),
             db_pass=getenv("SURREALDB_PASSWORD", "root"),
+            session_id=session_id,
+            ask_user=ask_user,
         ),
         #model_settings={"temperature": 0.2},
     )
@@ -219,7 +258,7 @@ def _build_agent() -> Agent[Any, Any]:
     )
     agent.tool_plain(search_pois)
     #agent.tool_plain(search_closest_city)
-    agent.tool_plain(prompt_user)
+    agent.tool(prompt_user, sequential=True)
     return agent
 
 

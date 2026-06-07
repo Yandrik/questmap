@@ -10,6 +10,8 @@ services:
       SURREALDB_PASSWORD: root
       VALHALLA_URL: http://valhalla:8002
       MOTIS_URL: http://motis:8080
+      BACKENDPOINT_URL: ${BACKENDPOINT_URL}
+      PLANNING_AGENT_MODEL: ${PLANNING_AGENT_MODEL}
     ports:
       - "8000:8000"
     depends_on:

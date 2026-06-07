@@ -1,4 +1,5 @@
 import '../../../_shared/models/geo_coordinate.dart';
+import '../../../_shared/models/transit_leg_details.dart';
 import '../../../_shared/models/transport_mode.dart';
 
 class NavigationCandidate {
@@ -40,6 +41,7 @@ class NavigationLeg {
     this.distanceMeters,
     this.geometry = const [],
     this.displayName,
+    this.transitDetails,
   });
 
   final TransportMode mode;
@@ -49,6 +51,7 @@ class NavigationLeg {
   final double? distanceMeters;
   final List<GeoCoordinate> geometry;
   final String? displayName;
+  final TransitLegDetails? transitDetails;
 }
 
 class NavigationCandidateParser {
@@ -161,10 +164,33 @@ class NavigationCandidateParser {
               _stringValue(leg['displayName']) ??
               _stringValue(leg['routeShortName']) ??
               _stringValue(leg['routeLongName']),
+          transitDetails: _motisTransitDetails(leg),
         ),
       );
     }
     return legs;
+  }
+
+  static TransitLegDetails _motisTransitDetails(Map<String, Object?> leg) {
+    return TransitLegDetails(
+      fromLabel: _placeLabel(leg['from'], 'Start'),
+      toLabel: _placeLabel(leg['to'], 'Destination'),
+      routeName: _stringValue(leg['routeName']),
+      routeShortName: _stringValue(leg['routeShortName']),
+      routeLongName: _stringValue(leg['routeLongName']),
+      displayName: _stringValue(leg['displayName']),
+      vehicleType: _vehicleTypeLabel(_stringValue(leg['mode'])),
+      headsign: _stringValue(leg['headsign']),
+      agencyName: _stringValue(leg['agencyName']),
+      startTime: _dateTimeValue(leg['startTime']),
+      endTime: _dateTimeValue(leg['endTime']),
+      scheduledStartTime: _dateTimeValue(leg['scheduledStartTime']),
+      scheduledEndTime: _dateTimeValue(leg['scheduledEndTime']),
+      realTime: _boolValue(leg['realTime']),
+      cancelled: _boolValue(leg['cancelled']),
+      intermediateStopLabels: _intermediateStopLabels(leg['intermediateStops']),
+      instructions: _stepInstructions(leg['steps']),
+    );
   }
 
   static List<GeoCoordinate> _coordinatesFromValhallaLegs(Object? rawLegs) {
@@ -258,9 +284,79 @@ class NavigationCandidateParser {
     };
   }
 
+  static String? _vehicleTypeLabel(String? mode) {
+    return switch (mode) {
+      'BUS' || 'COACH' => 'Bus',
+      'TRAM' => 'Tram',
+      'SUBWAY' || 'METRO' => 'Subway',
+      'RAIL' ||
+      'HIGHSPEED_RAIL' ||
+      'LONG_DISTANCE' ||
+      'NIGHT_RAIL' ||
+      'REGIONAL_FAST_RAIL' ||
+      'REGIONAL_RAIL' ||
+      'SUBURBAN' => 'Train',
+      'FERRY' => 'Ferry',
+      'FUNICULAR' => 'Funicular',
+      'AERIAL_LIFT' || 'CABLE_CAR' || 'AREAL_LIFT' => 'Cable car',
+      'AIRPLANE' => 'Flight',
+      'TRANSIT' => 'Transit',
+      _ => null,
+    };
+  }
+
   static String _placeLabel(Object? place, String fallback) {
     final map = _mapValue(place);
     return _stringValue(map?['name']) ?? fallback;
+  }
+
+  static List<String> _intermediateStopLabels(Object? value) {
+    if (value is! List) return const [];
+    return value
+        .map((rawStop) => _stringValue(_mapValue(rawStop)?['name']))
+        .whereType<String>()
+        .toList();
+  }
+
+  static List<String> _stepInstructions(Object? value) {
+    if (value is! List) return const [];
+    return value
+        .map((rawStep) => _stepInstruction(_mapValue(rawStep)))
+        .whereType<String>()
+        .toList();
+  }
+
+  static String? _stepInstruction(Map<String, Object?>? step) {
+    if (step == null) return null;
+    final direction = _stringValue(step['relativeDirection']);
+    final streetName = _stringValue(step['streetName']);
+    final distance = _doubleValue(step['distance']);
+    final distanceLabel = distance == null
+        ? null
+        : distance >= 1000
+        ? '${(distance / 1000).toStringAsFixed(1)} km'
+        : '${distance.round()} m';
+    final action = _directionLabel(direction);
+    if (streetName != null && distanceLabel != null) {
+      return '$action on $streetName for $distanceLabel';
+    }
+    if (streetName != null) return '$action on $streetName';
+    if (distanceLabel != null) return '$action for $distanceLabel';
+    return action;
+  }
+
+  static String _directionLabel(String? direction) {
+    return switch (direction) {
+      'DEPART' => 'Start',
+      'CONTINUE' => 'Continue',
+      'LEFT' || 'SLIGHTLY_LEFT' || 'HARD_LEFT' => 'Turn left',
+      'RIGHT' || 'SLIGHTLY_RIGHT' || 'HARD_RIGHT' => 'Turn right',
+      'STAIRS' => 'Take the stairs',
+      'ELEVATOR' => 'Take the elevator',
+      'UTURN_LEFT' || 'UTURN_RIGHT' => 'Make a U-turn',
+      'CIRCLE_CLOCKWISE' || 'CIRCLE_COUNTERCLOCKWISE' => 'Enter the circle',
+      _ => 'Continue',
+    };
   }
 
   static String _motisSummaryLabel(List<NavigationLeg> legs, int duration) {
@@ -314,6 +410,19 @@ class NavigationCandidateParser {
   static double? _doubleValue(Object? value) {
     if (value is num) return value.toDouble();
     if (value is String) return double.tryParse(value);
+    return null;
+  }
+
+  static bool? _boolValue(Object? value) {
+    if (value is bool) return value;
+    if (value is String) return bool.tryParse(value);
+    return null;
+  }
+
+  static DateTime? _dateTimeValue(Object? value) {
+    if (value == null) return null;
+    if (value is DateTime) return value;
+    if (value is String) return DateTime.tryParse(value);
     return null;
   }
 

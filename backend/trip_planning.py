@@ -8,6 +8,7 @@ import math
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from os import getenv
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -23,12 +24,15 @@ from trip_planning_models import (
     TransportMode,
     TripPlan,
     TripPlanItem,
+    TripQuestionOption,
     TripPlanningAnswer,
     TripPlanningEventPayload,
     TripPlanningQuestion,
+    TripPlanningQuestionKind,
     TripPlanningRequest,
     TripPlanningSessionSnapshot,
     TripRouteSegment,
+    TransitLegDetails,
 )
 from valhalla import (
     CostingType,
@@ -128,6 +132,10 @@ class ValhallaRoutingClient(Protocol):
 
 class MotisRoutingClient(Protocol):
     async def plan(self, plan_request: MotisPlanRequest) -> dict[str, Any]: ...
+
+
+class PlanningEngine(Protocol):
+    async def build_plan(self, session_id: str) -> TripPlan: ...
 
 
 class SurrealTripPlanningRepository:
@@ -309,11 +317,20 @@ class TripPlanningService:
         valhalla: ValhallaRoutingClient,
         motis: MotisRoutingClient,
         event_bus: TripPlanningEventBus | None = None,
+        planner: PlanningEngine | None = None,
+        use_agent: bool | None = None,
     ) -> None:
         self._repository = repository
-        self._planner = TripPlanner(repository, valhalla, motis)
         self._event_bus = event_bus or TripPlanningEventBus()
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._pending_answers: dict[str, tuple[str, asyncio.Future[Any]]] = {}
+        self._question_locks: dict[str, asyncio.Lock] = {}
+        if planner is not None:
+            self._planner = planner
+        elif _use_agent_planner(use_agent):
+            self._planner = AgentTripPlanner(repository, self.ask_user)
+        else:
+            self._planner = TripPlanner(repository, valhalla, motis)
 
     async def start_session(self, request: TripPlanningRequest) -> str:
         session_id = uuid4().hex
@@ -344,6 +361,11 @@ class TripPlanningService:
                 "lastMessage": "Applying your answer...",
             },
         )
+        pending = self._pending_answers.get(session_id)
+        if pending is not None:
+            pending_question_id, future = pending
+            if pending_question_id == answer.question_id and not future.done():
+                future.set_result(answer.value)
         await self._emit(
             session_id,
             TripPlanningEventPayload(
@@ -351,6 +373,70 @@ class TripPlanningService:
                 message="Applying your answer...",
             ),
         )
+
+    async def ask_user(
+        self,
+        session_id: str,
+        kind: TripPlanningQuestionKind,
+        prompt: str,
+        options: list[TripQuestionOption | str | dict[str, Any]] | None = None,
+        unit: str | None = None,
+    ) -> Any:
+        lock = self._question_locks.setdefault(session_id, asyncio.Lock())
+        async with lock:
+            return await self._ask_user_locked(
+                session_id,
+                kind,
+                prompt,
+                options,
+                unit,
+            )
+
+    async def _ask_user_locked(
+        self,
+        session_id: str,
+        kind: TripPlanningQuestionKind,
+        prompt: str,
+        options: list[TripQuestionOption | str | dict[str, Any]] | None,
+        unit: str | None,
+    ) -> Any:
+        session = await self._repository.get_session(session_id)
+        if session.state in {"completed", "failed", "cancelled"}:
+            raise StaleAnswerError("Session cannot ask questions in its current state")
+
+        question = TripPlanningQuestion(
+            id=uuid4().hex,
+            kind=kind,
+            prompt=prompt,
+            unit=unit,
+            options=_question_options(options),
+        )
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        self._pending_answers[session_id] = (question.id, future)
+
+        await self._repository.update_session(
+            session_id,
+            {
+                "state": "waitingForAnswer",
+                "currentQuestion": _json_model(question),
+                "lastMessage": prompt,
+            },
+        )
+        await self._emit(
+            session_id,
+            TripPlanningEventPayload(
+                type="question",
+                message=prompt,
+                question=question,
+            ),
+        )
+
+        try:
+            return await future
+        finally:
+            pending = self._pending_answers.get(session_id)
+            if pending is not None and pending[0] == question.id:
+                self._pending_answers.pop(session_id, None)
 
     async def cancel_session(self, session_id: str) -> None:
         session = await self._repository.get_session(session_id)
@@ -360,6 +446,12 @@ class TripPlanningService:
         task = self._tasks.get(session_id)
         if task is not None:
             task.cancel()
+        pending = self._pending_answers.pop(session_id, None)
+        if pending is not None:
+            _, future = pending
+            if not future.done():
+                future.cancel()
+        self._question_locks.pop(session_id, None)
         await self._repository.update_session(
             session_id,
             {
@@ -393,6 +485,11 @@ class TripPlanningService:
                     yield ": keepalive\n\n"
 
     async def close(self) -> None:
+        for _, future in self._pending_answers.values():
+            if not future.done():
+                future.cancel()
+        self._pending_answers.clear()
+        self._question_locks.clear()
         tasks = list(self._tasks.values())
         for task in tasks:
             task.cancel()
@@ -718,6 +815,7 @@ class TripPlanner:
                 time=depart_at,
                 detailedLegs=True,
                 detailedTransfers=True,
+                joinInterlinedLegs=False,
                 directModes=[],
                 preTransitModes=["WALK"],
                 postTransitModes=["WALK"],
@@ -758,6 +856,178 @@ class TripPlanner:
         )
 
 
+class AgentTripPlanner:
+    def __init__(
+        self,
+        repository: TripPlanningRepository,
+        ask_user: Any,
+    ) -> None:
+        self._repository = repository
+        self._ask_user = ask_user
+
+    async def build_plan(self, session_id: str) -> TripPlan:
+        from pydantic_ai_local import plan_trip
+
+        session = await self._repository.get_session(session_id)
+        request = session.request
+        agent_input = _agent_input_from_request(request)
+        agent_output = await plan_trip(
+            agent_input,
+            session_id=session_id,
+            ask_user=self._ask_user,
+        )
+        return _trip_plan_from_agent_output(session_id, request, agent_output)
+
+
+def _use_agent_planner(use_agent: bool | None) -> bool:
+    if use_agent is not None:
+        return use_agent
+    return getenv("NO_AGENT", "").strip().lower() not in {"1", "true", "yes", "on"}
+
+
+def _agent_input_from_request(request: TripPlanningRequest) -> Any:
+    from pydantic_ai_local import TripLocations, TripPlanInput
+
+    locations = []
+    radii = []
+    cursor = request.start_location
+    for step in request.steps:
+        center, radius_meters = _agent_location_center(step, cursor)
+        cursor = center
+        radii.append(radius_meters)
+        locations.append(
+            TripLocations(
+                city=_agent_city_label(center, step),
+                lat=center.lat,
+                lon=center.lon,
+                category=_agent_category(step.type),
+                notes=step.details or None,
+            )
+        )
+
+    return TripPlanInput(
+        start_point=(request.start_location.lat, request.start_location.lon),
+        end_point=(
+            (request.end_location or request.start_location).lat,
+            (request.end_location or request.start_location).lon,
+        ),
+        trip_locations=locations,
+        max_stops=max(1, len(request.steps) * 6),
+        radius_meters=round(max(radii, default=5000.0)),
+    )
+
+
+def _agent_location_center(
+    step: ItineraryStepDraft, cursor: GeoCoordinate
+) -> tuple[GeoCoordinate, float]:
+    constraint = step.location
+    if constraint.type in {"exactPoint", "aroundPoint"} and constraint.point is not None:
+        return constraint.point, constraint.radius_meters or 750.0
+    if constraint.type == "areaCircle" and constraint.center is not None:
+        return constraint.center, constraint.radius_meters or 1000.0
+    minutes = constraint.max_transport_minutes or 15
+    return cursor, max(500.0, min(minutes * 80.0, 5000.0))
+
+
+def _agent_city_label(center: GeoCoordinate, step: ItineraryStepDraft) -> str:
+    if center.label:
+        return center.label
+    if step.title:
+        return step.title
+    return ""
+
+
+def _agent_category(step_type: ItineraryStepType) -> str:
+    if step_type == "shop":
+        return "shop"
+    if step_type in {"eat", "party"}:
+        return "restaurant"
+    if step_type == "sightsee":
+        return "sightseeing"
+    if step_type in {"walk", "meander", "transit", "exactLocation"}:
+        return "other"
+    return "other"
+
+
+def _trip_plan_from_agent_output(
+    session_id: str,
+    request: TripPlanningRequest,
+    agent_output: Any,
+) -> TripPlan:
+    current_time = _initial_time(request)
+    items: list[TripPlanItem] = []
+    ordered_groups = getattr(agent_output, "ordered_points", [])
+
+    for group_index, raw_group in enumerate(ordered_groups):
+        step = request.steps[min(group_index, len(request.steps) - 1)]
+        for point_index, raw_point in enumerate(_agent_group_points(raw_group), start=1):
+            coordinate = _agent_point_coordinate(raw_point)
+            if coordinate is None:
+                continue
+
+            title = _agent_point_title(raw_point) or step.title
+            activity_start = _activity_start_time(step, current_time)
+            activity_end = activity_start + timedelta(
+                minutes=step.time.duration_minutes
+            )
+            items.append(
+                TripPlanItem(
+                    id=f"activity-{group_index + 1}-{point_index}",
+                    type="activity",
+                    title=title,
+                    description=step.details or title,
+                    reasoning=getattr(agent_output, "route_strategy", None),
+                    source_draft_step_id=step.id,
+                    step_type=step.type,
+                    start_time=activity_start,
+                    end_time=activity_end,
+                    location=_with_default_label(coordinate, title),
+                    visual_target=LocationConstraint(
+                        type="exactPoint",
+                        point=_with_default_label(coordinate, title),
+                    ),
+                )
+            )
+            current_time = activity_end
+
+    return TripPlan(
+        id=f"plan-{session_id}",
+        title=_plan_title(request),
+        summary=getattr(agent_output, "summary", None),
+        items=items,
+    )
+
+
+def _agent_group_points(raw_group: Any) -> list[Any]:
+    if isinstance(raw_group, list):
+        return raw_group
+    return [raw_group]
+
+
+def _agent_point_coordinate(raw_point: Any) -> GeoCoordinate | None:
+    geometry = getattr(raw_point, "geometry", None)
+    coordinates = getattr(geometry, "coordinates", None)
+    if (
+        isinstance(coordinates, tuple | list)
+        and len(coordinates) >= 2
+        and isinstance(coordinates[0], int | float)
+        and isinstance(coordinates[1], int | float)
+    ):
+        return GeoCoordinate(lat=float(coordinates[1]), lon=float(coordinates[0]))
+    return None
+
+
+def _agent_point_title(raw_point: Any) -> str | None:
+    properties = getattr(raw_point, "properties", None)
+    if properties is None:
+        return None
+    for key in ("name", "operator", "office"):
+        value = getattr(properties, key, None)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def _validate_answer_value(question: TripPlanningQuestion, value: Any) -> None:
     if question.kind == "yesNo" and not isinstance(value, bool):
         raise InvalidAnswerError("yesNo answers must be boolean")
@@ -771,7 +1041,54 @@ def _validate_answer_value(question: TripPlanningQuestion, value: Any) -> None:
             return
         if isinstance(value, dict):
             return
+        if isinstance(value, list) and all(
+            isinstance(item, dict)
+            or (isinstance(item, str) and (not valid_ids or item in valid_ids))
+            for item in value
+        ):
+            return
         raise InvalidAnswerError("selection answers must reference an option")
+
+
+def _question_options(
+    values: list[TripQuestionOption | str | dict[str, Any]] | None,
+) -> list[TripQuestionOption]:
+    if values is None:
+        return []
+
+    options: list[TripQuestionOption] = []
+    for index, value in enumerate(values, start=1):
+        if isinstance(value, TripQuestionOption):
+            options.append(value)
+        elif isinstance(value, str):
+            options.append(TripQuestionOption(id=value, title=value))
+        elif isinstance(value, dict):
+            option_id = str(
+                value.get("id")
+                or value.get("osm_id")
+                or value.get("osmId")
+                or value.get("value")
+                or f"option-{index}"
+            )
+            title = str(
+                value.get("title")
+                or value.get("name")
+                or value.get("label")
+                or option_id
+            )
+            description = value.get("description")
+            options.append(
+                TripQuestionOption(
+                    id=option_id,
+                    title=title,
+                    description=description if isinstance(description, str) else None,
+                    image_url=_str_value(
+                        value.get("imageUrl") or value.get("image_url")
+                    ),
+                    payload=value,
+                )
+            )
+    return options
 
 
 def _sse(payload: TripPlanningEventPayload) -> str:
@@ -841,7 +1158,10 @@ def _initial_time(request: TripPlanningRequest) -> datetime:
         (step.time.start_time for step in request.steps if step.time.start_time),
         None,
     )
-    return _ensure_aware(first_start) if first_start is not None else _utc_now()
+    now = _utc_now()
+    if first_start is None:
+        return now
+    return max(now, _ensure_aware(first_start))
 
 
 def _activity_start_time(step: ItineraryStepDraft, current_time: datetime) -> datetime:
@@ -1054,9 +1374,107 @@ def _segments_from_motis_legs(raw_legs: Any) -> list[TripRouteSegment]:
                 transport_mode=mode,
                 geometry=_coordinates_from_motis_geometry(leg.get("legGeometry")),
                 description=_motis_leg_description(leg, mode),
+                transit_details=_transit_details_from_motis_leg(leg),
             )
         )
     return segments
+
+
+def _transit_details_from_motis_leg(leg: dict[str, Any]) -> TransitLegDetails:
+    return TransitLegDetails(
+        from_label=_place_label(leg.get("from"), "Start"),
+        to_label=_place_label(leg.get("to"), "Destination"),
+        route_name=_str_value(leg.get("routeName")),
+        route_short_name=_str_value(leg.get("routeShortName")),
+        route_long_name=_str_value(leg.get("routeLongName")),
+        display_name=_str_value(leg.get("displayName")),
+        vehicle_type=_vehicle_type_label(_str_value(leg.get("mode"))),
+        headsign=_str_value(leg.get("headsign")),
+        agency_name=_str_value(leg.get("agencyName")),
+        start_time=_datetime_value_or_none(leg.get("startTime")),
+        end_time=_datetime_value_or_none(leg.get("endTime")),
+        scheduled_start_time=_datetime_value_or_none(leg.get("scheduledStartTime")),
+        scheduled_end_time=_datetime_value_or_none(leg.get("scheduledEndTime")),
+        real_time=_bool_value(leg.get("realTime")),
+        cancelled=_bool_value(leg.get("cancelled")),
+        intermediate_stop_labels=_intermediate_stop_labels(
+            leg.get("intermediateStops")
+        ),
+        instructions=_step_instructions(leg.get("steps")),
+    )
+
+
+def _place_label(value: Any, fallback: str) -> str:
+    place = _dict_value(value)
+    if place is None:
+        return fallback
+    return _str_value(place.get("name")) or fallback
+
+
+def _intermediate_stop_labels(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    labels: list[str] = []
+    for raw_stop in value:
+        stop = _dict_value(raw_stop)
+        label = _str_value(stop.get("name")) if stop is not None else None
+        if label is not None:
+            labels.append(label)
+    return labels
+
+
+def _step_instructions(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    instructions: list[str] = []
+    for raw_step in value:
+        step = _dict_value(raw_step)
+        instruction = _step_instruction(step)
+        if instruction is not None:
+            instructions.append(instruction)
+    return instructions
+
+
+def _step_instruction(step: dict[str, Any] | None) -> str | None:
+    if step is None:
+        return None
+    direction = _direction_label(_str_value(step.get("relativeDirection")))
+    street_name = _str_value(step.get("streetName"))
+    distance = _float_value(step.get("distance"))
+    distance_label = _distance_label(distance) if distance is not None else None
+    if street_name is not None and distance_label is not None:
+        return f"{direction} on {street_name} for {distance_label}"
+    if street_name is not None:
+        return f"{direction} on {street_name}"
+    if distance_label is not None:
+        return f"{direction} for {distance_label}"
+    return direction
+
+
+def _direction_label(direction: str | None) -> str:
+    if direction == "DEPART":
+        return "Start"
+    if direction == "CONTINUE":
+        return "Continue"
+    if direction in {"LEFT", "SLIGHTLY_LEFT", "HARD_LEFT"}:
+        return "Turn left"
+    if direction in {"RIGHT", "SLIGHTLY_RIGHT", "HARD_RIGHT"}:
+        return "Turn right"
+    if direction == "STAIRS":
+        return "Take the stairs"
+    if direction == "ELEVATOR":
+        return "Take the elevator"
+    if direction in {"UTURN_LEFT", "UTURN_RIGHT"}:
+        return "Make a U-turn"
+    if direction in {"CIRCLE_CLOCKWISE", "CIRCLE_COUNTERCLOCKWISE"}:
+        return "Enter the circle"
+    return "Continue"
+
+
+def _distance_label(distance_meters: float) -> str:
+    if distance_meters >= 1000:
+        return f"{distance_meters / 1000:.1f} km"
+    return f"{round(distance_meters)} m"
 
 
 def _motis_legs_duration(raw_legs: Any) -> int:
@@ -1099,6 +1517,36 @@ def _transport_mode_from_motis(mode: str | None) -> TransportMode:
     if mode in {"CAR", "CAR_PARKING", "CAR_DROPOFF"}:
         return "drive"
     return "publicTransport"
+
+
+def _vehicle_type_label(mode: str | None) -> str | None:
+    if mode in {"BUS", "COACH"}:
+        return "Bus"
+    if mode == "TRAM":
+        return "Tram"
+    if mode in {"SUBWAY", "METRO"}:
+        return "Subway"
+    if mode in {
+        "RAIL",
+        "HIGHSPEED_RAIL",
+        "LONG_DISTANCE",
+        "NIGHT_RAIL",
+        "REGIONAL_FAST_RAIL",
+        "REGIONAL_RAIL",
+        "SUBURBAN",
+    }:
+        return "Train"
+    if mode == "FERRY":
+        return "Ferry"
+    if mode == "FUNICULAR":
+        return "Funicular"
+    if mode in {"AERIAL_LIFT", "CABLE_CAR", "AREAL_LIFT"}:
+        return "Cable car"
+    if mode == "AIRPLANE":
+        return "Flight"
+    if mode == "TRANSIT":
+        return "Transit"
+    return None
 
 
 def _motis_leg_description(leg: dict[str, Any], mode: TransportMode) -> str:
@@ -1197,4 +1645,26 @@ def _float_value(value: Any) -> float | None:
     if isinstance(value, str):
         with contextlib.suppress(ValueError):
             return float(value)
+    return None
+
+
+def _bool_value(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        if value.lower() == "true":
+            return True
+        if value.lower() == "false":
+            return False
+    return None
+
+
+def _datetime_value_or_none(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            return datetime.fromisoformat(value)
     return None

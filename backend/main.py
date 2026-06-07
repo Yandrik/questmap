@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import logging
 from typing import Any
 
 import httpx
@@ -35,6 +36,8 @@ from trip_planning_models import (
     TripPlanningStartResponse,
 )
 from valhalla import ValhallaClient, ValhallaRouteRequest
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -181,10 +184,26 @@ async def transit_health(request: Request) -> TransitHealthResponse:
 
 @app.post("/transit/plan")
 async def transit_plan(body: MotisPlanRequest, request: Request) -> dict[str, Any]:
+    plan_request = _normalize_transit_plan_time(body)
+    logger.info(
+        "Transit plan request from=%s to=%s received_time=%s used_time=%s",
+        body.from_place,
+        body.to_place,
+        body.time.isoformat() if body.time is not None else None,
+        "motis-default-now" if plan_request.time is None else plan_request.time,
+    )
     try:
-        return await request.app.state.motis.plan(body)
+        return await request.app.state.motis.plan(plan_request)
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code
+        logger.warning(
+            "Transit plan failed status=%s from=%s to=%s used_time=%s detail=%s",
+            status_code,
+            plan_request.from_place,
+            plan_request.to_place,
+            "motis-default-now" if plan_request.time is None else plan_request.time,
+            exc.response.text,
+        )
         if status_code in {400, 404, 422, 429}:
             raise HTTPException(
                 status_code=status_code, detail=exc.response.text
@@ -192,6 +211,10 @@ async def transit_plan(body: MotisPlanRequest, request: Request) -> dict[str, An
         raise HTTPException(status_code=502, detail="MOTIS plan failed") from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail="MOTIS plan failed") from exc
+
+
+def _normalize_transit_plan_time(body: MotisPlanRequest) -> MotisPlanRequest:
+    return body.model_copy(update={"time": None})
 
 
 # ---------------------------------------------------------------------------

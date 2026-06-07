@@ -75,6 +75,78 @@ void main() {
     expect(candidates.single.legs.last.mode, TransportMode.publicTransport);
   });
 
+  test('parses MOTIS transit leg details and walking steps', () {
+    final candidates = NavigationCandidateParser.fromMotis({
+      'itineraries': [
+        {
+          'id': 'itinerary-1',
+          'duration': 1800,
+          'legs': [
+            {
+              'mode': 'WALK',
+              'from': {'name': 'Here'},
+              'to': {'name': 'Stop A'},
+              'duration': 240,
+              'distance': 180,
+              'startTime': '2026-06-07T10:00:00Z',
+              'endTime': '2026-06-07T10:04:00Z',
+              'steps': [
+                {
+                  'relativeDirection': 'RIGHT',
+                  'streetName': 'Main Street',
+                  'distance': 120,
+                },
+              ],
+            },
+            {
+              'mode': 'BUS',
+              'from': {'name': 'Stop A'},
+              'to': {'name': 'Stop B'},
+              'duration': 1200,
+              'displayName': '7',
+              'routeShortName': '7',
+              'routeLongName': 'City Bus 7',
+              'headsign': 'Downtown',
+              'agencyName': 'Transit Agency',
+              'startTime': '2026-06-07T10:05:00Z',
+              'endTime': '2026-06-07T10:25:00Z',
+              'scheduledStartTime': '2026-06-07T10:03:00Z',
+              'scheduledEndTime': '2026-06-07T10:23:00Z',
+              'realTime': true,
+              'cancelled': false,
+              'intermediateStops': [
+                {'name': 'Middle A'},
+                {'name': 'Middle B'},
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    final walkDetails = candidates.single.legs.first.transitDetails!;
+    expect(walkDetails.fromLabel, 'Here');
+    expect(walkDetails.toLabel, 'Stop A');
+    expect(
+      walkDetails.instructions.single,
+      'Turn right on Main Street for 120 m',
+    );
+
+    final busDetails = candidates.single.legs.last.transitDetails!;
+    expect(busDetails.vehicleType, 'Bus');
+    expect(busDetails.routeShortName, '7');
+    expect(busDetails.headsign, 'Downtown');
+    expect(busDetails.agencyName, 'Transit Agency');
+    expect(busDetails.startTime, DateTime.parse('2026-06-07T10:05:00Z'));
+    expect(
+      busDetails.scheduledStartTime,
+      DateTime.parse('2026-06-07T10:03:00Z'),
+    );
+    expect(busDetails.realTime, isTrue);
+    expect(busDetails.cancelled, isFalse);
+    expect(busDetails.intermediateStopLabels, ['Middle A', 'Middle B']);
+  });
+
   test('decodes Google polyline geometry', () {
     final coordinates = NavigationCandidateParser.decodePolyline(
       '_p~iF~ps|U_ulLnnqC_mqNvxq`@',

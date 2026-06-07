@@ -1,4 +1,5 @@
 import '../../../_shared/models/geo_coordinate.dart';
+import '../../../_shared/models/transit_leg_details.dart';
 import '../../../_shared/models/transport_mode.dart';
 import 'itinerary_step_draft.dart';
 import 'location_constraint.dart';
@@ -146,6 +147,7 @@ class TripRouteSegment {
     required this.transportMode,
     this.geometry = const [],
     this.description,
+    this.transitDetails,
   });
 
   factory TripRouteSegment.fromJson(Map<String, Object?> json) {
@@ -155,6 +157,9 @@ class TripRouteSegment {
         json['transportMode'] as String,
       ),
       description: json['description'] as String?,
+      transitDetails: json['transitDetails'] == null
+          ? null
+          : TransitLegDetails.fromJson(_map(json['transitDetails'])),
       geometry: rawGeometry is List
           ? rawGeometry
                 .map((coordinate) => GeoCoordinate.fromJson(_map(coordinate)))
@@ -166,10 +171,12 @@ class TripRouteSegment {
   final TransportMode transportMode;
   final List<GeoCoordinate> geometry;
   final String? description;
+  final TransitLegDetails? transitDetails;
 
   Map<String, Object?> toJson() => {
     'transportMode': transportMode.apiValue,
     if (description != null) 'description': description,
+    if (transitDetails != null) 'transitDetails': transitDetails!.toJson(),
     'geometry': geometry.map((coordinate) => coordinate.toJson()).toList(),
   };
 }
