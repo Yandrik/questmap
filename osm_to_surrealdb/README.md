@@ -22,7 +22,7 @@ uv run python osm_objects_to_geojson.py ~/Downloads/tuebingen-regbez-260604.osm.
 
 ## 2. Create the SurrealDB Table
 
-Run the schema in `osm_table.surql` against your SurrealDB instance before importing data.
+Run the schema in `osm_table.surql` against your SurrealDB instance before importing data. (Auto run in step 3)
 
 ## 3. Import the GeoJSON
 

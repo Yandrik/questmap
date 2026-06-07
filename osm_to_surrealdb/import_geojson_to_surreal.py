@@ -261,6 +261,11 @@ def main() -> int:
     started = time.monotonic()
     db = connect(args)
     try:
+        if not args.replace:
+            print("Run schema setup query...")
+            with open("osm_table.surql","r",encoding="utf-8") as f:
+                db.query(f.read())
+            print("Start importing data...")
         for rid, row in iterator:
             import_record(db, rid, row, args.replace)
             imported += 1

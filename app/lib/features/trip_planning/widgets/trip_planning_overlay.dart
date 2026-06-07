@@ -7,7 +7,7 @@ import 'package:watch_it/watch_it.dart';
 import '../manager/trip_agent_manager.dart';
 import '../model/trip_planning_session.dart';
 
-class TripPlanningOverlay extends StatefulWidget {
+class TripPlanningOverlay extends WatchingStatefulWidget {
   const TripPlanningOverlay({super.key});
 
   @override

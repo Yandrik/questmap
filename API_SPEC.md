@@ -4,9 +4,9 @@ This document defines the backend API needed by the Flutter frontend for direct
 navigation and AI-assisted trip planning.
 
 Base URL is provided to Flutter as `QUESTMAP_API_BASE_URL` and defaults to
-`http://localhost:8000`. Request and response JSON owned by Questmap uses
-camelCase field names. Existing upstream proxy endpoints keep Valhalla and MOTIS
-field names where noted.
+`https://back.hack5.yandrik.dev`. Request and response JSON owned by Questmap
+uses camelCase field names. Existing upstream proxy endpoints keep Valhalla and
+MOTIS field names where noted.
 
 ## Common Rules
 
