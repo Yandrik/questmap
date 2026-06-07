@@ -52,42 +52,77 @@ class TripComposerPanel extends WatchingWidget {
                     children: [
                       _Header(onClose: onClose),
                       const SizedBox(height: 12),
-                      _LocationSummary(draft: draft),
-                      const SizedBox(height: 12),
                       _TransportModeSelector(draft: draft),
                       const SizedBox(height: 12),
                       Expanded(
-                        child: draft.steps.isEmpty
-                            ? _EmptyDraftState(
+                        child: ListView(
+                          controller: scrollController,
+                          padding: EdgeInsets.zero,
+                          children: [
+                            _TripLocationInput(
+                              label: 'Start',
+                              value: _coordinateLabel(draft.startLocation),
+                              icon: Icons.trip_origin,
+                              fullWidth: true,
+                              onTap: _beginStartLocationPick,
+                            ),
+                            const SizedBox(height: 10),
+                            if (draft.steps.isEmpty)
+                              _EmptyDraftState(
                                 onAdd: () => _showActivityDialog(context),
                               )
-                            : ListView(
-                                controller: scrollController,
-                                padding: EdgeInsets.zero,
-                                children: [
-                                  for (
-                                    var index = 0;
-                                    index < draft.steps.length;
-                                    index++
-                                  ) ...[
-                                    _ItineraryStepCard(
-                                      step: draft.steps[index],
+                            else
+                              for (
+                                var index = 0;
+                                index < draft.steps.length;
+                                index++
+                              ) ...[
+                                if (index == 0)
+                                  _InsertStepButton(
+                                    highlighted: false,
+                                    onPressed: () => _showActivityDialog(
+                                      context,
+                                      insertIndex: 0,
                                     ),
-                                    if (index < draft.steps.length - 1)
-                                      _InsertStepButton(
-                                        highlighted: _hasLargeGapAfter(
-                                          draft.steps,
-                                          index,
-                                        ),
-                                        onPressed: () => _showActivityDialog(
-                                          context,
-                                          insertIndex: index + 1,
-                                        ),
-                                      ),
-                                    const SizedBox(height: 10),
-                                  ],
-                                ],
-                              ),
+                                  ),
+                                _ItineraryStepCard(
+                                  step: draft.steps[index],
+                                  onEdit: () => _showActivityDialog(
+                                    context,
+                                    editStep: draft.steps[index],
+                                  ),
+                                  onEditLocation: () => _beginStepLocationPick(
+                                    draft.steps[index],
+                                  ),
+                                ),
+                                _InsertStepButton(
+                                  highlighted:
+                                      index < draft.steps.length - 1 &&
+                                      _hasLargeGapAfter(draft.steps, index),
+                                  onPressed: () => _showActivityDialog(
+                                    context,
+                                    insertIndex: index + 1,
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                              ],
+                            _TripLocationInput(
+                              label: 'End',
+                              value: draft.endLocation == null
+                                  ? 'Add end location'
+                                  : _coordinateLabel(draft.endLocation!),
+                              icon: Icons.flag_outlined,
+                              fullWidth: true,
+                              muted: draft.endLocation == null,
+                              onTap: _beginEndLocationPick,
+                              onClear: draft.endLocation == null
+                                  ? null
+                                  : () => di<TripDraftManager>().setEndLocation(
+                                      null,
+                                    ),
+                            ),
+                          ],
+                        ),
                       ),
                       if (planManager.currentPlan != null) ...[
                         const SizedBox(height: 10),
@@ -129,40 +164,99 @@ class TripComposerPanel extends WatchingWidget {
   Future<void> _showActivityDialog(
     BuildContext context, {
     int? insertIndex,
+    ItineraryStepDraft? editStep,
   }) async {
     final manager = di<TripDraftManager>();
     final targetIndex = insertIndex ?? manager.draft?.steps.length ?? 0;
     final result = await showDialog<_ActivityDialogResult>(
       context: context,
-      builder: (context) =>
-          _ActivityPickerDialog(selectedTarget: selectedTarget),
+      builder: (context) => _ActivityPickerDialog(
+        selectedTarget: selectedTarget,
+        initialStep: editStep,
+      ),
     );
     if (result == null || !context.mounted) return;
     final location = result.location;
     if (location != null) {
-      manager.insertStep(
-        index: targetIndex,
-        type: result.type,
-        details: result.details,
-        durationMinutes: result.durationMinutes,
-        location: location,
-      );
+      if (editStep == null) {
+        manager.insertStep(
+          index: targetIndex,
+          type: result.type,
+          details: result.details,
+          durationMinutes: result.durationMinutes,
+          location: location,
+        );
+      } else {
+        manager.updateStep(
+          editStep.copyWith(
+            type: result.type,
+            details: result.details,
+            time: editStep.time.copyWith(
+              durationMinutes: result.durationMinutes,
+            ),
+            location: location,
+          ),
+        );
+      }
       return;
     }
 
     final pickKind = result.pickKind;
     if (pickKind == null) return;
-    manager.beginLocationPick(
-      index: targetIndex,
-      type: result.type,
-      details: result.details,
-      durationMinutes: result.durationMinutes,
-      kind: pickKind,
-      areaCenter: result.areaCenter,
-      radiusMeters: result.radiusMeters,
-    );
+    if (editStep == null) {
+      manager.beginLocationPick(
+        index: targetIndex,
+        type: result.type,
+        details: result.details,
+        durationMinutes: result.durationMinutes,
+        kind: pickKind,
+        areaCenter: result.areaCenter,
+        radiusMeters: result.radiusMeters,
+      );
+    } else {
+      manager.updateStep(
+        editStep.copyWith(
+          type: result.type,
+          details: result.details,
+          time: editStep.time.copyWith(durationMinutes: result.durationMinutes),
+        ),
+      );
+      manager.beginStepLocationPick(
+        stepId: editStep.id,
+        kind: pickKind,
+        areaCenter: result.areaCenter,
+        radiusMeters: result.radiusMeters,
+      );
+    }
     di<MapInteractionManager>().setMode(
       pickKind.usesArea
+          ? MapInteractionMode.drawArea
+          : MapInteractionMode.selectPoint,
+    );
+  }
+
+  void _beginStartLocationPick() {
+    di<TripDraftManager>().beginStartLocationPick();
+    di<MapInteractionManager>().setMode(MapInteractionMode.selectStart);
+  }
+
+  void _beginEndLocationPick() {
+    di<TripDraftManager>().beginEndLocationPick();
+    di<MapInteractionManager>().setMode(MapInteractionMode.selectEnd);
+  }
+
+  static void _beginStepLocationPick(ItineraryStepDraft step) {
+    final location = step.location;
+    final kind = _pickKindForLocation(location);
+    if (kind == null) return;
+    di<TripDraftManager>().beginStepLocationPick(
+      stepId: step.id,
+      kind: kind,
+      areaCenter: location.center,
+      radiusMeters: location.radiusMeters ?? 500,
+    );
+    di<MapInteractionManager>().setMode(
+      kind.usesArea
           ? MapInteractionMode.drawArea
           : MapInteractionMode.selectPoint,
     );
@@ -341,53 +435,6 @@ class _Header extends StatelessWidget {
   }
 }
 
-class _LocationSummary extends StatelessWidget {
-  const _LocationSummary({required this.draft});
-
-  final TripDraft draft;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        color: theme.colorScheme.surfaceContainerHighest.withValues(
-          alpha: 0.45,
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Start', style: theme.textTheme.labelMedium),
-            Text(
-              draft.startLocation.label ?? draft.startLocation.coordinateLabel,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 8),
-            Text('End', style: theme.textTheme.labelMedium),
-            Text(
-              draft.endLocation?.label ??
-                  draft.endLocation?.coordinateLabel ??
-                  'Optional',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: draft.endLocation == null
-                    ? theme.colorScheme.onSurfaceVariant
-                    : null,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _TransportModeSelector extends StatelessWidget {
   const _TransportModeSelector({required this.draft});
 
@@ -420,6 +467,77 @@ class _TransportModeSelector extends StatelessWidget {
   }
 }
 
+class _TripLocationInput extends StatelessWidget {
+  const _TripLocationInput({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.onTap,
+    this.fullWidth = false,
+    this.muted = false,
+    this.onClear,
+  });
+
+  final String label;
+  final String value;
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool fullWidth;
+  final bool muted;
+  final VoidCallback? onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final input = InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: onTap,
+      child: InputDecorator(
+        decoration: InputDecoration(
+          isDense: true,
+          labelText: label,
+          prefixIcon: Icon(icon, size: 18),
+          prefixIconConstraints: const BoxConstraints(
+            minWidth: 34,
+            minHeight: 34,
+          ),
+          suffixIcon: onClear == null
+              ? const Icon(Icons.search, size: 18)
+              : IconButton(
+                  tooltip: 'Clear $label',
+                  onPressed: onClear,
+                  icon: const Icon(Icons.close, size: 18),
+                ),
+          suffixIconConstraints: const BoxConstraints(
+            minWidth: 34,
+            minHeight: 34,
+          ),
+          border: const OutlineInputBorder(),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 8,
+            vertical: 8,
+          ),
+        ),
+        child: Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: muted ? theme.colorScheme.onSurfaceVariant : null,
+            fontStyle: muted ? FontStyle.italic : null,
+          ),
+        ),
+      ),
+    );
+
+    if (fullWidth) return input;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 112, maxWidth: 170),
+      child: input,
+    );
+  }
+}
+
 class _EmptyDraftState extends StatelessWidget {
   const _EmptyDraftState({required this.onAdd});
 
@@ -442,9 +560,15 @@ class _EmptyDraftState extends StatelessWidget {
 }
 
 class _ItineraryStepCard extends StatelessWidget {
-  const _ItineraryStepCard({required this.step});
+  const _ItineraryStepCard({
+    required this.step,
+    required this.onEdit,
+    required this.onEditLocation,
+  });
 
   final ItineraryStepDraft step;
+  final VoidCallback onEdit;
+  final VoidCallback onEditLocation;
 
   @override
   Widget build(BuildContext context) {
@@ -464,14 +588,21 @@ class _ItineraryStepCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.22),
+                Tooltip(
+                  message: 'Edit activity',
+                  child: InkWell(
                     borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: SizedBox.square(
-                    dimension: 40,
-                    child: Icon(_stepIcon(step.type), color: color),
+                    onTap: onEdit,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: color.withValues(alpha: 0.22),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: SizedBox.square(
+                        dimension: 40,
+                        child: Icon(_stepIcon(step.type), color: color),
+                      ),
+                    ),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -495,6 +626,17 @@ class _ItineraryStepCard extends StatelessWidget {
                     ],
                   ),
                 ),
+                if (step.location.type != LocationConstraintType.wherever) ...[
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: _TripLocationInput(
+                      label: 'Location',
+                      value: _locationConstraintLabel(step.location),
+                      icon: Icons.search,
+                      onTap: onEditLocation,
+                    ),
+                  ),
+                ],
                 IconButton(
                   tooltip: 'Remove',
                   onPressed: () => di<TripDraftManager>().removeStep(step.id),
@@ -514,18 +656,6 @@ class _ItineraryStepCard extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  IconData _stepIcon(ItineraryStepType type) {
-    return switch (type) {
-      ItineraryStepType.shop => Icons.shopping_bag,
-      ItineraryStepType.eat => Icons.restaurant,
-      ItineraryStepType.party => Icons.nightlife,
-      ItineraryStepType.walk => Icons.directions_walk,
-      ItineraryStepType.sightsee => Icons.photo_camera,
-      ItineraryStepType.meander => Icons.auto_awesome,
-      ItineraryStepType.exactLocation => Icons.place,
-    };
   }
 }
 
@@ -613,9 +743,10 @@ class _DurationMenu extends StatelessWidget {
 }
 
 class _ActivityPickerDialog extends StatefulWidget {
-  const _ActivityPickerDialog({required this.selectedTarget});
+  const _ActivityPickerDialog({required this.selectedTarget, this.initialStep});
 
   final SelectedMapTarget? selectedTarget;
+  final ItineraryStepDraft? initialStep;
 
   @override
   State<_ActivityPickerDialog> createState() => _ActivityPickerDialogState();
@@ -626,6 +757,26 @@ class _ActivityPickerDialogState extends State<_ActivityPickerDialog> {
   String _details = '';
   int _durationMinutes = 60;
   _LocationChoice _locationChoice = _LocationChoice.wherever;
+  late final TextEditingController _detailsController;
+
+  @override
+  void initState() {
+    super.initState();
+    final step = widget.initialStep;
+    if (step != null) {
+      _type = step.type;
+      _details = step.details;
+      _durationMinutes = step.time.durationMinutes;
+      _locationChoice = _locationChoiceForLocation(step.location);
+    }
+    _detailsController = TextEditingController(text: _details);
+  }
+
+  @override
+  void dispose() {
+    _detailsController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -633,9 +784,10 @@ class _ActivityPickerDialogState extends State<_ActivityPickerDialog> {
     final hasTarget = target != null;
     final canUseSelectedTarget =
         hasTarget && _locationChoice != _LocationChoice.wherever;
+    final isEditing = widget.initialStep != null;
 
     return AlertDialog(
-      title: const Text('Add activity'),
+      title: Text(isEditing ? 'Edit activity' : 'Add activity'),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -653,23 +805,26 @@ class _ActivityPickerDialogState extends State<_ActivityPickerDialog> {
                   ItineraryStepType.sightsee,
                   ItineraryStepType.meander,
                 ])
-                  ChoiceChip(
-                    label: Text(type.defaultTitle),
+                  _ActivityTypeChip(
+                    type: type,
                     selected: _type == type,
-                    onSelected: (_) => setState(() => _type = type),
+                    onSelected: _selectActivityType,
                   ),
-                ChoiceChip(
-                  label: const Text('Exact location'),
+                _ActivityTypeChip(
+                  type: ItineraryStepType.exactLocation,
                   selected: _type == ItineraryStepType.exactLocation,
-                  onSelected: (_) => setState(() {
-                    _type = ItineraryStepType.exactLocation;
-                    _locationChoice = _LocationChoice.exactSelected;
-                  }),
+                  onSelected: (type) {
+                    setState(() {
+                      _type = type;
+                      _locationChoice = _LocationChoice.exactSelected;
+                    });
+                  },
                 ),
               ],
             ),
             const SizedBox(height: 16),
             TextField(
+              controller: _detailsController,
               decoration: InputDecoration(
                 labelText: 'Extra info',
                 hintText: _type.detailHint,
@@ -700,34 +855,40 @@ class _ActivityPickerDialogState extends State<_ActivityPickerDialog> {
               },
             ),
             const SizedBox(height: 16),
-            SegmentedButton<_LocationChoice>(
-              segments: [
-                ButtonSegment(
-                  value: _LocationChoice.wherever,
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _LocationChoiceChip(
+                  choice: _LocationChoice.wherever,
+                  selected: _locationChoice == _LocationChoice.wherever,
                   enabled: _type != ItineraryStepType.exactLocation,
-                  icon: Icon(Icons.travel_explore),
-                  label: const Text('Wherever'),
+                  icon: Icons.travel_explore,
+                  label: 'Wherever',
+                  onSelected: _selectLocationChoice,
                 ),
-                const ButtonSegment(
-                  value: _LocationChoice.aroundSelected,
-                  icon: Icon(Icons.my_location),
-                  label: Text('Around here'),
+                _LocationChoiceChip(
+                  choice: _LocationChoice.aroundSelected,
+                  selected: _locationChoice == _LocationChoice.aroundSelected,
+                  icon: Icons.my_location,
+                  label: 'Around here',
+                  onSelected: _selectLocationChoice,
                 ),
-                const ButtonSegment(
-                  value: _LocationChoice.areaSelected,
-                  icon: Icon(Icons.radio_button_unchecked),
-                  label: Text('Area'),
+                _LocationChoiceChip(
+                  choice: _LocationChoice.areaSelected,
+                  selected: _locationChoice == _LocationChoice.areaSelected,
+                  icon: Icons.radio_button_unchecked,
+                  label: 'Area',
+                  onSelected: _selectLocationChoice,
                 ),
-                const ButtonSegment(
-                  value: _LocationChoice.exactSelected,
-                  icon: Icon(Icons.place),
-                  label: Text('Exact'),
+                _LocationChoiceChip(
+                  choice: _LocationChoice.exactSelected,
+                  selected: _locationChoice == _LocationChoice.exactSelected,
+                  icon: Icons.place,
+                  label: 'Exact',
+                  onSelected: _selectLocationChoice,
                 ),
               ],
-              selected: {_locationChoice},
-              onSelectionChanged: (values) {
-                setState(() => _locationChoice = values.single);
-              },
             ),
           ],
         ),
@@ -741,19 +902,32 @@ class _ActivityPickerDialogState extends State<_ActivityPickerDialog> {
           TextButton(
             onPressed: () =>
                 Navigator.of(context).pop(_selectedTargetResult(target)),
-            child: const Text('Use selected target'),
+            child: const Text('Selected'),
           ),
         FilledButton(
           onPressed: () => Navigator.of(context).pop(_primaryResult()),
           child: Text(
-            _locationChoice == _LocationChoice.wherever ? 'Add' : 'Pick on map',
+            _locationChoice == _LocationChoice.wherever
+                ? isEditing
+                      ? 'Save'
+                      : 'Add'
+                : 'Pick where',
           ),
         ),
       ],
     );
   }
 
+  void _selectLocationChoice(_LocationChoice choice) {
+    setState(() => _locationChoice = choice);
+  }
+
+  void _selectActivityType(ItineraryStepType type) {
+    setState(() => _type = type);
+  }
+
   _ActivityDialogResult _primaryResult() {
+    final existingLocation = widget.initialStep?.location;
     return switch (_locationChoice) {
       _LocationChoice.wherever => _ActivityDialogResult.insert(
         type: _type,
@@ -761,6 +935,30 @@ class _ActivityPickerDialogState extends State<_ActivityPickerDialog> {
         durationMinutes: _durationMinutes,
         location: LocationConstraint.wherever(),
       ),
+      _LocationChoice.aroundSelected
+          when existingLocation?.type == LocationConstraintType.aroundPoint =>
+        _ActivityDialogResult.insert(
+          type: _type,
+          details: _details,
+          durationMinutes: _durationMinutes,
+          location: existingLocation!,
+        ),
+      _LocationChoice.areaSelected
+          when existingLocation?.type == LocationConstraintType.areaCircle =>
+        _ActivityDialogResult.insert(
+          type: _type,
+          details: _details,
+          durationMinutes: _durationMinutes,
+          location: existingLocation!,
+        ),
+      _LocationChoice.exactSelected
+          when existingLocation?.type == LocationConstraintType.exactPoint =>
+        _ActivityDialogResult.insert(
+          type: _type,
+          details: _details,
+          durationMinutes: _durationMinutes,
+          location: existingLocation!,
+        ),
       _LocationChoice.aroundSelected => _ActivityDialogResult.pickOnMap(
         type: _type,
         details: _details,
@@ -810,6 +1008,74 @@ class _ActivityPickerDialogState extends State<_ActivityPickerDialog> {
 }
 
 enum _LocationChoice { wherever, aroundSelected, areaSelected, exactSelected }
+
+class _ActivityTypeChip extends StatelessWidget {
+  const _ActivityTypeChip({
+    required this.type,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final ItineraryStepType type;
+  final bool selected;
+  final ValueChanged<ItineraryStepType> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Color(type.colorValue);
+    final theme = Theme.of(context);
+    return ChoiceChip(
+      avatar: Icon(
+        _stepIcon(type),
+        size: 18,
+        color: selected ? color : color.withValues(alpha: 0.88),
+      ),
+      label: Text(type.defaultTitle, softWrap: false),
+      selected: selected,
+      showCheckmark: false,
+      backgroundColor: color.withValues(alpha: 0.10),
+      selectedColor: color.withValues(alpha: 0.22),
+      side: BorderSide(
+        color: selected
+            ? color.withValues(alpha: 0.85)
+            : color.withValues(alpha: 0.35),
+      ),
+      labelStyle: theme.textTheme.labelLarge?.copyWith(
+        color: selected ? color : theme.colorScheme.onSurface,
+        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+      ),
+      onSelected: (_) => onSelected(type),
+    );
+  }
+}
+
+class _LocationChoiceChip extends StatelessWidget {
+  const _LocationChoiceChip({
+    required this.choice,
+    required this.selected,
+    required this.icon,
+    required this.label,
+    required this.onSelected,
+    this.enabled = true,
+  });
+
+  final _LocationChoice choice;
+  final bool selected;
+  final IconData icon;
+  final String label;
+  final ValueChanged<_LocationChoice> onSelected;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    return ChoiceChip(
+      avatar: Icon(icon, size: 18),
+      label: Text(label, softWrap: false),
+      selected: selected,
+      onSelected: enabled ? (_) => onSelected(choice) : null,
+    );
+  }
+}
 
 class _ActivityDialogResult {
   const _ActivityDialogResult._({
@@ -865,10 +1131,77 @@ class _ActivityDialogResult {
 
 extension on SelectedMapTarget {
   GeoCoordinate toGeoCoordinate() {
+    if (isWaypoint) {
+      return GeoCoordinate(
+        lat: coordinates.latitude,
+        lon: coordinates.longitude,
+      );
+    }
+    final label =
+        '$name (${coordinates.latitude.toStringAsFixed(6)}, '
+        '${coordinates.longitude.toStringAsFixed(6)})';
     return GeoCoordinate(
       lat: coordinates.latitude,
       lon: coordinates.longitude,
-      label: name,
+      label: label,
     );
   }
+}
+
+String _coordinateLabel(GeoCoordinate coordinate) {
+  return coordinate.label ?? coordinate.coordinateLabel;
+}
+
+String _locationConstraintLabel(LocationConstraint location) {
+  return switch (location.type) {
+    LocationConstraintType.exactPoint =>
+      location.point == null
+          ? 'Pick location'
+          : _coordinateLabel(location.point!),
+    LocationConstraintType.aroundPoint =>
+      location.point == null
+          ? 'Pick location'
+          : 'Around ${_coordinateLabel(location.point!)}',
+    LocationConstraintType.areaCircle =>
+      location.center == null
+          ? 'Pick area'
+          : '${_coordinateLabel(location.center!)} / '
+                '${_radiusLabel(location.radiusMeters ?? 500)}',
+    LocationConstraintType.wherever => 'Wherever',
+  };
+}
+
+_LocationChoice _locationChoiceForLocation(LocationConstraint location) {
+  return switch (location.type) {
+    LocationConstraintType.exactPoint => _LocationChoice.exactSelected,
+    LocationConstraintType.aroundPoint => _LocationChoice.aroundSelected,
+    LocationConstraintType.areaCircle => _LocationChoice.areaSelected,
+    LocationConstraintType.wherever => _LocationChoice.wherever,
+  };
+}
+
+TripLocationPickKind? _pickKindForLocation(LocationConstraint location) {
+  return switch (location.type) {
+    LocationConstraintType.exactPoint => TripLocationPickKind.exactPoint,
+    LocationConstraintType.aroundPoint => TripLocationPickKind.aroundPoint,
+    LocationConstraintType.areaCircle => TripLocationPickKind.areaCircle,
+    LocationConstraintType.wherever => null,
+  };
+}
+
+IconData _stepIcon(ItineraryStepType type) {
+  return switch (type) {
+    ItineraryStepType.shop => Icons.shopping_bag,
+    ItineraryStepType.eat => Icons.restaurant,
+    ItineraryStepType.party => Icons.nightlife,
+    ItineraryStepType.walk => Icons.directions_walk,
+    ItineraryStepType.sightsee => Icons.photo_camera,
+    ItineraryStepType.meander => Icons.auto_awesome,
+    ItineraryStepType.exactLocation => Icons.place,
+  };
+}
+
+String _radiusLabel(double meters) {
+  if (meters < 1000) return '${meters.round()} m';
+  return '${(meters / 1000).toStringAsFixed(1)} km';
 }

@@ -1,11 +1,9 @@
 import 'dart:async';
 
-import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meander/_shared/models/geo_coordinate.dart';
 import 'package:meander/_shared/models/transport_mode.dart';
 import 'package:meander/_shared/services/api_client.dart';
-import 'package:meander/_shared/services/local_database.dart';
 import 'package:meander/_shared/services/local_persistence_service.dart';
 import 'package:meander/features/trip_planning/manager/trip_agent_manager.dart';
 import 'package:meander/features/trip_planning/manager/trip_plan_manager.dart';
@@ -18,15 +16,13 @@ import 'package:meander/features/trip_planning/model/trip_planning_session.dart'
 import 'package:meander/features/trip_planning/services/trip_planning_api_service.dart';
 
 void main() {
-  late LocalDatabase database;
   late LocalPersistenceService persistence;
   late _FakeTripPlanningApiService api;
   late TripPlanManager planManager;
   late TripAgentManager agentManager;
 
   setUp(() {
-    database = LocalDatabase(NativeDatabase.memory());
-    persistence = LocalPersistenceService(database);
+    persistence = LocalPersistenceService(MemoryLocalPersistenceStore());
     api = _FakeTripPlanningApiService();
     planManager = TripPlanManager(persistence);
     agentManager = TripAgentManager(api, planManager, persistence);
@@ -35,7 +31,6 @@ void main() {
   tearDown(() async {
     agentManager.dispose();
     planManager.dispose();
-    await database.close();
     await api.close();
   });
 

@@ -140,6 +140,57 @@ class TripDraftManager extends ChangeNotifier {
       durationMinutes: durationMinutes,
       insertIndex: _clampInsertIndex(index, draft.steps.length),
       kind: kind,
+      target: const TripLocationPickTarget.insertStep(),
+      areaCenter: areaCenter,
+      radiusMeters: radiusMeters,
+    );
+    notifyListeners();
+  }
+
+  void beginStartLocationPick() {
+    _requireDraft();
+    _pendingLocationPick = const PendingTripLocationPick(
+      type: ItineraryStepType.exactLocation,
+      details: '',
+      durationMinutes: 0,
+      insertIndex: 0,
+      kind: TripLocationPickKind.exactPoint,
+      target: TripLocationPickTarget.startLocation(),
+    );
+    notifyListeners();
+  }
+
+  void beginEndLocationPick() {
+    final draft = _requireDraft();
+    _pendingLocationPick = PendingTripLocationPick(
+      type: ItineraryStepType.exactLocation,
+      details: '',
+      durationMinutes: 0,
+      insertIndex: draft.steps.length,
+      kind: TripLocationPickKind.exactPoint,
+      target: const TripLocationPickTarget.endLocation(),
+    );
+    notifyListeners();
+  }
+
+  void beginStepLocationPick({
+    required String stepId,
+    required TripLocationPickKind kind,
+    GeoCoordinate? areaCenter,
+    double radiusMeters = 500,
+  }) {
+    final draft = _requireDraft();
+    final step = draft.steps.firstWhere(
+      (step) => step.id == stepId,
+      orElse: () => throw StateError('Step $stepId does not exist.'),
+    );
+    _pendingLocationPick = PendingTripLocationPick(
+      type: step.type,
+      details: step.details,
+      durationMinutes: step.time.durationMinutes,
+      insertIndex: draft.steps.indexWhere((step) => step.id == stepId),
+      kind: kind,
+      target: TripLocationPickTarget.stepLocation(stepId),
       areaCenter: areaCenter,
       radiusMeters: radiusMeters,
     );
@@ -234,6 +285,49 @@ class TripDraftManager extends ChangeNotifier {
   void _completePendingPick(LocationConstraint location) {
     final pending = _requirePendingLocationPick();
     final draft = _requireDraft();
+    final now = DateTime.now().toUtc();
+
+    switch (pending.target.type) {
+      case TripLocationPickTargetType.startLocation:
+        final point = _locationPoint(location);
+        if (point == null) {
+          throw StateError('Start location requires a point.');
+        }
+        _draft = draft.copyWith(startLocation: point, updatedAt: now);
+        _pendingLocationPick = null;
+        _changed();
+        return;
+      case TripLocationPickTargetType.endLocation:
+        final point = _locationPoint(location);
+        if (point == null) {
+          throw StateError('End location requires a point.');
+        }
+        _draft = draft.copyWith(endLocation: point, updatedAt: now);
+        _pendingLocationPick = null;
+        _changed();
+        return;
+      case TripLocationPickTargetType.stepLocation:
+        final stepId = pending.target.stepId;
+        if (stepId == null) {
+          throw StateError('Step location target requires a step id.');
+        }
+        _draft = draft.copyWith(
+          steps: [
+            for (final step in draft.steps)
+              if (step.id == stepId)
+                step.copyWith(location: location)
+              else
+                step,
+          ],
+          updatedAt: now,
+        );
+        _pendingLocationPick = null;
+        _changed();
+        return;
+      case TripLocationPickTargetType.insertStep:
+        break;
+    }
+
     final insertIndex = _clampInsertIndex(
       pending.insertIndex,
       draft.steps.length,
@@ -251,10 +345,19 @@ class TripDraftManager extends ChangeNotifier {
         step,
         ...draft.steps.skip(insertIndex),
       ],
-      updatedAt: DateTime.now().toUtc(),
+      updatedAt: now,
     );
     _pendingLocationPick = null;
     _changed();
+  }
+
+  static GeoCoordinate? _locationPoint(LocationConstraint location) {
+    return switch (location.type) {
+      LocationConstraintType.exactPoint ||
+      LocationConstraintType.aroundPoint => location.point,
+      LocationConstraintType.areaCircle => location.center,
+      LocationConstraintType.wherever => null,
+    };
   }
 
   void _changed() {

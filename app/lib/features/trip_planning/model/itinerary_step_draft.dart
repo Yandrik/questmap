@@ -98,15 +98,17 @@ class ItineraryStepDraft {
   };
 
   ItineraryStepDraft copyWith({
+    ItineraryStepType? type,
     String? title,
     String? details,
     TimeConstraint? time,
     LocationConstraint? location,
   }) {
+    final nextType = type ?? this.type;
     return ItineraryStepDraft(
       id: id,
-      type: type,
-      title: title ?? this.title,
+      type: nextType,
+      title: title ?? (type == null ? this.title : nextType.defaultTitle),
       details: details ?? this.details,
       time: time ?? this.time,
       location: location ?? this.location,

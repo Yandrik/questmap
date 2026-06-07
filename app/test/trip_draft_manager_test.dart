@@ -1,8 +1,6 @@
-import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meander/_shared/models/geo_coordinate.dart';
 import 'package:meander/_shared/models/transport_mode.dart';
-import 'package:meander/_shared/services/local_database.dart';
 import 'package:meander/_shared/services/local_persistence_service.dart';
 import 'package:meander/features/trip_planning/manager/trip_draft_manager.dart';
 import 'package:meander/features/trip_planning/model/itinerary_step_draft.dart';
@@ -10,16 +8,10 @@ import 'package:meander/features/trip_planning/model/location_constraint.dart';
 import 'package:meander/features/trip_planning/model/pending_trip_location_pick.dart';
 
 void main() {
-  late LocalDatabase database;
   late LocalPersistenceService persistence;
 
   setUp(() {
-    database = LocalDatabase(NativeDatabase.memory());
-    persistence = LocalPersistenceService(database);
-  });
-
-  tearDown(() async {
-    await database.close();
+    persistence = LocalPersistenceService(MemoryLocalPersistenceStore());
   });
 
   test('creates, edits, saves, and restores active draft', () async {
@@ -123,6 +115,68 @@ void main() {
       LocationConstraintType.exactPoint,
     );
     expect(manager.draft!.steps.single.location.point!.label, 'Ulmer Münster');
+  });
+
+  test('completes pending point pick as updated start location', () async {
+    final manager = TripDraftManager(persistence);
+    await manager.ensureDraft(
+      startLocation: const GeoCoordinate(lat: 48.4, lon: 9.99),
+    );
+
+    manager.beginStartLocationPick();
+    manager.completePointPick(
+      const GeoCoordinate(lat: 48.398, lon: 9.992, label: 'My Location'),
+    );
+
+    expect(manager.pendingLocationPick, isNull);
+    expect(manager.draft!.startLocation.label, 'My Location');
+    expect(manager.draft!.startLocation.lat, 48.398);
+    expect(manager.draft!.steps, isEmpty);
+  });
+
+  test('completes pending point pick as updated end location', () async {
+    final manager = TripDraftManager(persistence);
+    await manager.ensureDraft(
+      startLocation: const GeoCoordinate(lat: 48.4, lon: 9.99),
+    );
+
+    manager.beginEndLocationPick();
+    manager.completePointPick(
+      const GeoCoordinate(lat: 48.5, lon: 10.1, label: 'Station'),
+    );
+
+    expect(manager.pendingLocationPick, isNull);
+    expect(manager.draft!.endLocation!.label, 'Station');
+    expect(manager.draft!.steps, isEmpty);
+  });
+
+  test('completes pending point pick as updated step location', () async {
+    final manager = TripDraftManager(persistence);
+    await manager.ensureDraft(
+      startLocation: const GeoCoordinate(lat: 48.4, lon: 9.99),
+    );
+    manager.addStep(
+      type: ItineraryStepType.shop,
+      details: 'clothes',
+      location: LocationConstraint.aroundPoint(
+        const GeoCoordinate(lat: 48.4, lon: 9.99),
+      ),
+    );
+    final step = manager.draft!.steps.single;
+
+    manager.beginStepLocationPick(
+      stepId: step.id,
+      kind: TripLocationPickKind.aroundPoint,
+    );
+    manager.completePointPick(
+      const GeoCoordinate(lat: 48.41, lon: 10.0, label: 'Mall'),
+    );
+
+    expect(manager.pendingLocationPick, isNull);
+    expect(manager.draft!.steps, hasLength(1));
+    final location = manager.draft!.steps.single.location;
+    expect(location.type, LocationConstraintType.aroundPoint);
+    expect(location.point!.label, 'Mall');
   });
 
   test('completes pending area location pick with radius', () async {

@@ -163,8 +163,19 @@ class _MapShellState extends State<MapShell> {
     if (pending == null) return;
 
     if (pending.kind.usesArea) {
+      final selectedTarget = await _targetForMapTap(
+        point: point,
+        coordinates: coordinates,
+        controller: controller,
+      );
+      if (!mounted || selectedTarget == null) return;
+      di<MapSelectionManager>().selectTarget(selectedTarget);
+      await _selectionOverlay.setSelectionCircle(
+        selectedTarget.coordinates,
+        controller,
+      );
       draftManager.updatePendingAreaCenter(
-        _toGeoCoordinate(coordinates, 'Selected area'),
+        _targetToGeoCoordinate(selectedTarget),
       );
       await _syncDraftLocationOverlay();
       return;
@@ -177,9 +188,8 @@ class _MapShellState extends State<MapShell> {
     );
     if (!mounted || selectedTarget == null) return;
 
-    draftManager.completePointPick(_targetToGeoCoordinate(selectedTarget));
-    di<MapInteractionManager>().setMode(MapInteractionMode.browse);
-    await _draftLocationOverlay.clear(controller);
+    di<MapSelectionManager>().selectTarget(selectedTarget);
+    await _completeTripPointPick(_targetToGeoCoordinate(selectedTarget));
   }
 
   Future<void> _syncDraftLocationOverlay() async {
@@ -235,6 +245,45 @@ class _MapShellState extends State<MapShell> {
     }
   }
 
+  Future<void> _completeTripPointPick(GeoCoordinate point) async {
+    di<TripDraftManager>().completePointPick(point);
+    di<MapInteractionManager>().setMode(MapInteractionMode.browse);
+    final controller = _controller;
+    if (controller != null) {
+      await _draftLocationOverlay.clear(controller);
+    }
+  }
+
+  Future<void> _useCurrentLocationForTripPick() async {
+    final pending = di<TripDraftManager>().pendingLocationPick;
+    if (pending == null) return;
+
+    final current = await _currentStartLocation(label: 'My Location');
+    if (!mounted) return;
+    if (current == null) {
+      di<MapSelectionManager>().setMessage(
+        'Current location is unavailable right now.',
+      );
+      return;
+    }
+
+    final controller = _controller;
+    final latLng = LatLng(current.lat, current.lon);
+    if (controller != null) {
+      await controller.animateCamera(CameraUpdate.newLatLngZoom(latLng, 16));
+      await _selectionOverlay.setWaypointMarker(latLng, controller);
+      await _selectionOverlay.setSelectionCircle(latLng, controller);
+    }
+
+    if (pending.kind.usesArea) {
+      di<TripDraftManager>().updatePendingAreaCenter(current);
+      await _syncDraftLocationOverlay();
+      return;
+    }
+
+    await _completeTripPointPick(current);
+  }
+
   Future<void> _cancelTripLocationPick() async {
     di<TripDraftManager>().cancelLocationPick();
     di<MapInteractionManager>().setMode(MapInteractionMode.browse);
@@ -287,7 +336,9 @@ class _MapShellState extends State<MapShell> {
   void _onUserLocationUpdated(UserLocation location) {
     final locationManager = di<LocationManager>();
     final shouldCenter = !locationManager.hasCenteredOnUserLocation;
-    locationManager.updateUserLocation(_toGeoCoordinate(location.position));
+    locationManager.updateUserLocation(
+      _toGeoCoordinate(location.position, 'My Location'),
+    );
 
     if (shouldCenter) {
       _goToUserLocation();
@@ -347,18 +398,24 @@ class _MapShellState extends State<MapShell> {
     );
   }
 
-  Future<GeoCoordinate?> _currentStartLocation() async {
+  Future<GeoCoordinate?> _currentStartLocation({String? label}) async {
     final locationManager = di<LocationManager>();
     final known = locationManager.lastUserLocation;
-    if (known != null) return known;
+    if (known != null) {
+      return label == null ? known : known.copyWith(label: label);
+    }
 
     final controller = _controller;
-    if (controller == null || !locationManager.isUserLocationEnabled) {
+    if (controller == null) {
       return null;
+    }
+    if (!locationManager.isUserLocationEnabled) {
+      final isGranted = await locationManager.requestPermission();
+      if (!isGranted) return null;
     }
     final location = await controller.requestMyLocationLatLng();
     if (location == null) return null;
-    final coordinate = _toGeoCoordinate(location);
+    final coordinate = _toGeoCoordinate(location, label);
     locationManager.updateUserLocation(coordinate);
     return coordinate;
   }
@@ -560,7 +617,12 @@ class _MapShellState extends State<MapShell> {
                       ? isPickingTripLocation
                             ? _TripLocationPickPanel(
                                 pending: pendingPick,
+                                selectedTarget: selectionManager.selectedTarget,
+                                currentLocation:
+                                    locationManager.lastUserLocation,
                                 compact: true,
+                                onUseCurrentLocation: () =>
+                                    unawaited(_useCurrentLocationForTripPick()),
                                 onCancel: () =>
                                     unawaited(_cancelTripLocationPick()),
                                 onConfirmArea: () =>
@@ -601,6 +663,10 @@ class _MapShellState extends State<MapShell> {
               bottom: 12,
               child: _TripLocationPickPanel(
                 pending: pendingPick,
+                selectedTarget: selectionManager.selectedTarget,
+                currentLocation: locationManager.lastUserLocation,
+                onUseCurrentLocation: () =>
+                    unawaited(_useCurrentLocationForTripPick()),
                 onCancel: () => unawaited(_cancelTripLocationPick()),
                 onConfirmArea: () => unawaited(_confirmTripAreaPick()),
                 onRadiusChanged: _updateTripAreaRadius,
@@ -623,11 +689,23 @@ GeoCoordinate _toGeoCoordinate(LatLng location, [String? label]) {
 }
 
 GeoCoordinate _targetToGeoCoordinate(SelectedMapTarget target) {
+  if (target.isWaypoint) {
+    return GeoCoordinate(
+      lat: target.coordinates.latitude,
+      lon: target.coordinates.longitude,
+    );
+  }
   return GeoCoordinate(
     lat: target.coordinates.latitude,
     lon: target.coordinates.longitude,
-    label: target.name,
+    label: _targetDisplayLabel(target),
   );
+}
+
+String _targetDisplayLabel(SelectedMapTarget target) {
+  if (target.isWaypoint) return target.coordinateLabel;
+  return '${target.name} (${target.coordinates.latitude.toStringAsFixed(6)}, '
+      '${target.coordinates.longitude.toStringAsFixed(6)})';
 }
 
 LatLng? _toLatLng(GeoCoordinate? coordinate) {
@@ -647,6 +725,9 @@ IconData _transportIcon(TransportMode mode) {
 class _TripLocationPickPanel extends StatelessWidget {
   const _TripLocationPickPanel({
     required this.pending,
+    required this.selectedTarget,
+    required this.currentLocation,
+    required this.onUseCurrentLocation,
     required this.onCancel,
     required this.onConfirmArea,
     required this.onRadiusChanged,
@@ -654,6 +735,9 @@ class _TripLocationPickPanel extends StatelessWidget {
   });
 
   final PendingTripLocationPick pending;
+  final SelectedMapTarget? selectedTarget;
+  final GeoCoordinate? currentLocation;
+  final VoidCallback onUseCurrentLocation;
   final VoidCallback onCancel;
   final VoidCallback onConfirmArea;
   final ValueChanged<double> onRadiusChanged;
@@ -664,6 +748,13 @@ class _TripLocationPickPanel extends StatelessWidget {
     final theme = Theme.of(context);
     final isArea = pending.kind.usesArea;
     final hasAreaCenter = pending.areaCenter != null;
+    final selectedLabel = selectedTarget == null
+        ? 'No map target selected'
+        : _targetDisplayLabel(selectedTarget!);
+    final currentLabel = currentLocation == null
+        ? 'My Current Location'
+        : 'My Current Location (${currentLocation!.lat.toStringAsFixed(6)}, '
+              '${currentLocation!.lon.toStringAsFixed(6)})';
 
     return SafeArea(
       top: false,
@@ -710,6 +801,27 @@ class _TripLocationPickPanel extends StatelessWidget {
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: onUseCurrentLocation,
+                icon: const Icon(Icons.my_location),
+                label: Text(currentLabel, overflow: TextOverflow.ellipsis),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  const Icon(Icons.ads_click, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      selectedLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+                ],
               ),
               if (isArea) ...[
                 const SizedBox(height: 8),

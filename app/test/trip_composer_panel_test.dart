@@ -1,4 +1,3 @@
-import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
@@ -6,9 +5,9 @@ import 'package:watch_it/watch_it.dart';
 
 import 'package:meander/_shared/models/geo_coordinate.dart';
 import 'package:meander/_shared/services/api_client.dart';
-import 'package:meander/_shared/services/local_database.dart';
 import 'package:meander/_shared/services/local_persistence_service.dart';
 import 'package:meander/features/map/manager/map_interaction_manager.dart';
+import 'package:meander/features/map/model/rendered_map_feature.dart';
 import 'package:meander/features/map/model/selected_map_target.dart';
 import 'package:meander/features/trip_planning/manager/trip_agent_manager.dart';
 import 'package:meander/features/trip_planning/manager/trip_draft_manager.dart';
@@ -20,21 +19,14 @@ import 'package:meander/features/trip_planning/services/trip_planning_api_servic
 import 'package:meander/features/trip_planning/widgets/trip_composer_panel.dart';
 
 void main() {
-  late LocalDatabase database;
-
   setUp(() async {
     await di.reset();
-    database = LocalDatabase(NativeDatabase.memory());
     di.registerLazySingleton<ApiClient>(
       () => ApiClient(baseUrl: 'http://api.test'),
       dispose: (client) => client.dispose(),
     );
-    di.registerLazySingleton<LocalDatabase>(
-      () => database,
-      dispose: (database) => database.close(),
-    );
     di.registerLazySingleton<LocalPersistenceService>(
-      () => LocalPersistenceService(di<LocalDatabase>()),
+      () => LocalPersistenceService(MemoryLocalPersistenceStore()),
     );
     di.registerLazySingleton<MapInteractionManager>(
       () => MapInteractionManager(),
@@ -83,8 +75,8 @@ void main() {
 
     await _pumpPanel(tester);
 
-    expect(find.byTooltip('Insert activity here'), findsOneWidget);
-    await tester.tap(find.byTooltip('Insert activity here'));
+    expect(find.byTooltip('Insert activity here'), findsWidgets);
+    await tester.tap(find.byTooltip('Insert activity here').at(1));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Add'));
     await tester.pumpAndSettle();
@@ -94,6 +86,134 @@ void main() {
       ItineraryStepType.meander,
       ItineraryStepType.eat,
     ]);
+  });
+
+  testWidgets('shows inline add buttons before and after a single activity', (
+    tester,
+  ) async {
+    final manager = di<TripDraftManager>();
+    manager.addStep(
+      type: ItineraryStepType.shop,
+      details: 'clothes',
+      location: LocationConstraint.wherever(),
+    );
+
+    await _pumpPanel(tester);
+
+    expect(find.byTooltip('Insert activity here'), findsNWidgets(2));
+  });
+
+  testWidgets('shows start and end location inputs and starts map picking', (
+    tester,
+  ) async {
+    await _pumpPanel(tester);
+
+    expect(find.text('Start'), findsOneWidget);
+    expect(find.text('Lat 48.400000, Lon 9.990000'), findsOneWidget);
+    expect(find.text('End'), findsOneWidget);
+    expect(find.text('Add end location'), findsOneWidget);
+
+    await tester.tap(find.text('Lat 48.400000, Lon 9.990000'));
+    await tester.pumpAndSettle();
+    expect(
+      di<TripDraftManager>().pendingLocationPick!.target.type,
+      TripLocationPickTargetType.startLocation,
+    );
+    expect(di<MapInteractionManager>().mode, MapInteractionMode.selectStart);
+
+    di<TripDraftManager>().cancelLocationPick();
+    await tester.tap(find.text('Add end location'));
+    await tester.pumpAndSettle();
+    expect(
+      di<TripDraftManager>().pendingLocationPick!.target.type,
+      TripLocationPickTargetType.endLocation,
+    );
+    expect(di<MapInteractionManager>().mode, MapInteractionMode.selectEnd);
+  });
+
+  testWidgets('shows compact location input only for located activities', (
+    tester,
+  ) async {
+    final manager = di<TripDraftManager>();
+    manager.addStep(
+      type: ItineraryStepType.shop,
+      details: 'clothes',
+      location: LocationConstraint.exactPoint(
+        const GeoCoordinate(lat: 48.41, lon: 10, label: 'Mall'),
+      ),
+    );
+    manager.addStep(
+      type: ItineraryStepType.eat,
+      details: 'Chinese',
+      location: LocationConstraint.wherever(),
+    );
+
+    await _pumpPanel(tester);
+
+    expect(find.text('Location'), findsOneWidget);
+    expect(find.text('Mall'), findsOneWidget);
+
+    await tester.tap(find.text('Mall'));
+    await tester.pumpAndSettle();
+    final pending = manager.pendingLocationPick!;
+    expect(pending.target.type, TripLocationPickTargetType.stepLocation);
+    expect(pending.target.stepId, manager.draft!.steps.first.id);
+  });
+
+  testWidgets('edits an activity from its icon', (tester) async {
+    final manager = di<TripDraftManager>();
+    manager.addStep(
+      type: ItineraryStepType.shop,
+      details: 'clothes',
+      location: LocationConstraint.wherever(),
+    );
+
+    await _pumpPanel(tester);
+
+    await tester.tap(find.byTooltip('Edit activity'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Eat').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'ramen');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    final step = manager.draft!.steps.single;
+    expect(step.type, ItineraryStepType.eat);
+    expect(step.title, 'Eat');
+    expect(step.details, 'ramen');
+  });
+
+  testWidgets('shows readable wrapping location choice labels in dialog', (
+    tester,
+  ) async {
+    await _pumpPanel(tester);
+
+    await tester.tap(find.text('Add activity'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Wherever'), findsOneWidget);
+    expect(find.text('Around here'), findsOneWidget);
+    expect(find.text('Area'), findsOneWidget);
+    expect(find.text('Exact'), findsOneWidget);
+  });
+
+  testWidgets('shows activity type chips with icons', (tester) async {
+    await _pumpPanel(tester);
+
+    await tester.tap(find.text('Add activity'));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithIcon(ChoiceChip, Icons.shopping_bag), findsOneWidget);
+    expect(find.widgetWithIcon(ChoiceChip, Icons.restaurant), findsOneWidget);
+    expect(find.widgetWithIcon(ChoiceChip, Icons.nightlife), findsOneWidget);
+    expect(
+      find.widgetWithIcon(ChoiceChip, Icons.directions_walk),
+      findsOneWidget,
+    );
+    expect(find.widgetWithIcon(ChoiceChip, Icons.photo_camera), findsOneWidget);
+    expect(find.widgetWithIcon(ChoiceChip, Icons.auto_awesome), findsOneWidget);
+    expect(find.widgetWithIcon(ChoiceChip, Icons.place), findsWidgets);
   });
 
   testWidgets('starts exact-location map picking without selected target', (
@@ -151,6 +271,33 @@ void main() {
     final step = di<TripDraftManager>().draft!.steps.single;
     expect(step.location.type, LocationConstraintType.aroundPoint);
     expect(step.location.point!.lat, 48.398);
+  });
+
+  testWidgets('stores feature labels with coordinates from selected target', (
+    tester,
+  ) async {
+    await _pumpPanel(
+      tester,
+      selectedTarget: SelectedMapTarget.feature(
+        feature: const RenderedMapFeature(
+          layerId: 'poi',
+          sourceLayer: 'poi',
+          properties: {'name': 'Museum'},
+          coordinates: LatLng(48.398, 9.992),
+        ),
+        fallbackCoordinates: const LatLng(48.398, 9.992),
+      ),
+    );
+
+    await tester.tap(find.text('Add activity'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Exact'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Use selected target'));
+    await tester.pumpAndSettle();
+
+    final step = di<TripDraftManager>().draft!.steps.single;
+    expect(step.location.point!.label, 'Museum (48.398000, 9.992000)');
   });
 }
 
