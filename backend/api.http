@@ -1,0 +1,135 @@
+@baseUrl = http://localhost:8000
+
+### Health check
+GET {{baseUrl}}/health
+
+### Database health check
+GET {{baseUrl}}/db/health
+
+### Create a trip (no activities)
+POST {{baseUrl}}/trips
+Content-Type: application/json
+
+{
+  "start_time": "2026-06-10T08:00:00Z",
+  "start_location": { "type": "Point", "coordinates": [13.3694, 52.5251] },
+  "end_time": "2026-06-10T18:00:00Z",
+  "end_location": { "type": "Point", "coordinates": [11.5583, 48.1402] },
+  "activities": []
+}
+
+### Create a trip (with activities)
+POST {{baseUrl}}/trips
+Content-Type: application/json
+
+{
+  "start_time": "2026-07-01T09:00:00Z",
+  "start_location": { "type": "Point", "coordinates": [10.0058, 53.5530] },
+  "end_time": "2026-07-03T20:00:00Z",
+  "end_location": { "type": "Point", "coordinates": [16.3706, 48.2002] },
+  "activities": [
+    {
+      "type": "hike",
+      "duration_minutes": 120,
+      "specification": "Trail through the Black Forest, moderate difficulty"
+    },
+    {
+      "type": "sightseeing",
+      "duration_minutes": 60,
+      "specification": null
+    },
+    {
+      "type": "meal",
+      "duration_minutes": 45,
+      "specification": "Traditional Bavarian dinner"
+    }
+  ]
+}
+
+### List all trips
+GET {{baseUrl}}/trips
+
+### Get a single trip by ID
+# Replace the ID below with one returned from a POST /trips response
+GET {{baseUrl}}/trips/trip:abc123
+
+
+# ===========================================================================
+# Routes
+# ===========================================================================
+
+### Create a route — all three step types
+# Replace trip_id with a real ID from POST /trips
+POST {{baseUrl}}/routes
+Content-Type: application/json
+
+{
+  "name": "Schwarzwald Rundtour",
+  "trip_id": "abc123",
+  "steps": [
+    {
+      "name": "Trailhead",
+      "duration": 0,
+      "description": "Starting point at the car park",
+      "type": "location",
+      "location": { "type": "Point", "coordinates": [8.2034, 47.9990] }
+    },
+    {
+      "name": "Forest Trail",
+      "duration": 3600,
+      "description": "Main hiking path through the forest",
+      "type": "path",
+      "path": {
+        "type": "LineString",
+        "coordinates": [
+          [8.2034, 47.9990],
+          [8.2100, 48.0050],
+          [8.2200, 48.0120],
+          [8.2300, 48.0080]
+        ]
+      }
+    },
+    {
+      "name": "Picnic Meadow",
+      "duration": 1800,
+      "description": "Open meadow area for a break",
+      "type": "area",
+      "area": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [8.2300, 48.0080],
+            [8.2350, 48.0080],
+            [8.2350, 48.0110],
+            [8.2300, 48.0110],
+            [8.2300, 48.0080]
+          ]
+        ]
+      }
+    }
+  ]
+}
+
+### Create a route — location step only
+POST {{baseUrl}}/routes
+Content-Type: application/json
+
+{
+  "name": "City Viewpoint",
+  "trip_id": "abc123",
+  "steps": [
+    {
+      "name": "Schlossplatz",
+      "duration": 900,
+      "type": "location",
+      "location": { "type": "Point", "coordinates": [9.1800, 48.7784] }
+    }
+  ]
+}
+
+### List all routes
+GET {{baseUrl}}/routes
+
+### Get a single route by ID
+# Replace the ID below with one returned from a POST /routes response
+GET {{baseUrl}}/routes/route:abc123

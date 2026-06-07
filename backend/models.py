@@ -1,53 +1,54 @@
-from __future__ import annotations
-
 from datetime import datetime
-from typing import Literal
+from enum import StrEnum
 
-from pydantic import BaseModel, Field, model_validator
-from surreal_orm import BaseSurrealModel
-
-
-class GeoPoint(BaseModel):
-    type: Literal["Point"] = "Point"
-    coordinates: list[float] = Field(..., min_length=2, max_length=2)
-    """[longitude, latitude]"""
+from pydantic import BaseModel, ConfigDict, Field
+from surrealdb.data.types.geometry import GeometryLine, GeometryPoint, GeometryPolygon
 
 
-class GeoPolygon(BaseModel):
-    type: Literal["Polygon"] = "Polygon"
-    coordinates: list[list[list[float]]]
-    """[[[longitude, latitude], ...]] — first/last point must close the ring"""
+class Activity(BaseModel):
+    """Activity embedded inside a Trip (not a separate table)."""
+
+    type: str
+    duration_minutes: int
+    specification: str | None = None
 
 
-class Quest(BaseSurrealModel):
+class Trip(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     id: str | None = None
-
     start_time: datetime
+    start_location: GeometryPoint
     end_time: datetime
-
-    position: GeoPoint | None = None
-    area: GeoPolygon | None = None
-
-    num_completions: int | None = None
-    description: str
-    xp_val: int = Field(..., ge=0)
-    issuer_id: str
-
-    @model_validator(mode="after")
-    def require_position_or_area(self) -> Quest:
-        if self.position is None and self.area is None:
-            raise ValueError("At least one of 'position' or 'area' must be provided")
-        return self
+    end_location: GeometryPoint
+    activities: list[Activity] = Field(default_factory=list)
 
 
-class QuestCompletion(BaseSurrealModel):
+# ---------------------------------------------------------------------------
+# Route / RouteStep
+# ---------------------------------------------------------------------------
+
+class RouteStepType(StrEnum):
+    path = "path"
+    area = "area"
+    location = "location"
+
+class RouteStep(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    type: RouteStepType
+    name: str
+    description: str | None = None
+    duration: float  # in minutes
+    area: GeometryPolygon | None = None
+    path: GeometryLine | None = None
+    location: GeometryPoint | None = None
+
+class Route(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     id: str | None = None
+    name: str
+    trip_id: str
+    steps: list[RouteStep] = Field(default_factory=list)
 
-    quest_id: str
-    completion_time: datetime
-    completion_user_id: str
-
-    proof_urls: list[str] | None = None
-    confirmed: bool
-    location: GeoPoint
-    user_location: GeoPoint | None = None
