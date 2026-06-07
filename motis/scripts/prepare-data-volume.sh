@@ -14,6 +14,7 @@ GTFS_ZIP="$DATA_DIR/gtfs-de.zip"
 VALHALLA_PBF="$VALHALLA_DATA_DIR/by-bw.osm.pbf"
 MOTIS_IMPORTED_MARKER="$DATA_DIR/.motis-imported"
 VALHALLA_PREPARED_MARKER="$VALHALLA_DATA_DIR/.valhalla-prepared"
+DATA_READY_MARKER="$VALHALLA_DATA_DIR/.data-ready"
 
 is_true() {
   case "${1,,}" in
@@ -77,6 +78,7 @@ touch "$VALHALLA_PREPARED_MARKER"
 if [[ ! -f "$MOTIS_IMPORTED_MARKER" ]] || is_true "$FORCE_REFRESH"; then
   echo "Importing MOTIS data"
   rm -f "$MOTIS_IMPORTED_MARKER"
+  rm -f "$DATA_READY_MARKER"
   (
     cd "$DATA_DIR"
     /motis import --data "$DATA_DIR" --config "$DATA_DIR/config.yml"
@@ -85,6 +87,7 @@ if [[ ! -f "$MOTIS_IMPORTED_MARKER" ]] || is_true "$FORCE_REFRESH"; then
 else
   echo "Keeping existing MOTIS import"
 fi
+touch "$DATA_READY_MARKER"
 
 echo "MOTIS data is ready in $DATA_DIR"
 echo "Valhalla data is ready in $VALHALLA_DATA_DIR"

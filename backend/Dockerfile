@@ -8,6 +8,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
 COPY *.py ./
+COPY migrations ./migrations
 
 EXPOSE 8000
 
