@@ -47,7 +47,7 @@ services:
     environment:
       tile_urls: ${VALHALLA_TILE_URLS:-}
       server_threads: ${VALHALLA_SERVER_THREADS:-2}
-      use_tiles_ignore_pbf: ${VALHALLA_USE_TILES_IGNORE_PBF:-True}
+      use_tiles_ignore_pbf: ${VALHALLA_USE_TILES_IGNORE_PBF:-False}
       build_elevation: ${VALHALLA_BUILD_ELEVATION:-False}
       build_admins: ${VALHALLA_BUILD_ADMINS:-True}
       build_time_zones: ${VALHALLA_BUILD_TIME_ZONES:-True}

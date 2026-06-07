@@ -223,6 +223,91 @@ async def test_trip_planning_service_fails_when_no_mode_can_route() -> None:
 
 
 @pytest.mark.asyncio
+async def test_trip_planning_service_direct_walks_nearby_unroutable_legs() -> None:
+    repository = _FakeTripPlanningRepository()
+    service = TripPlanningService(
+        repository,
+        _FailingValhallaClient(),
+        _FakeMotisClient(),
+    )
+
+    session_id = await service.start_session(
+        TripPlanningRequest(
+            draft_id="draft-1",
+            start_location=GeoCoordinate(lat=48.4, lon=9.99, label="Start"),
+            transport_modes=["publicTransport"],
+            steps=[
+                ItineraryStepDraft(
+                    id="step-1",
+                    type="eat",
+                    title="Eat",
+                    details="nearby",
+                    time=TimeConstraint(duration_minutes=30),
+                    location=LocationConstraint(
+                        type="exactPoint",
+                        point=GeoCoordinate(lat=48.40005, lon=9.99005),
+                    ),
+                )
+            ],
+        )
+    )
+
+    await _collect_sse_until_done(service, session_id)
+    snapshot = await service.get_session(session_id)
+    await service.close()
+
+    assert snapshot.state == "completed"
+    assert snapshot.final_plan is not None
+    travel = snapshot.final_plan.items[0]
+    assert travel.type == "travel"
+    assert travel.transport_mode == "walk"
+    assert travel.segments[0].transport_mode == "walk"
+
+
+@pytest.mark.asyncio
+async def test_trip_planning_service_does_not_direct_walk_local_unroutable_legs() -> (
+    None
+):
+    repository = _FakeTripPlanningRepository()
+    service = TripPlanningService(
+        repository,
+        _FailingValhallaClient(),
+        _FakeMotisClient(),
+    )
+
+    session_id = await service.start_session(
+        TripPlanningRequest(
+            draft_id="draft-1",
+            start_location=GeoCoordinate(lat=48.4, lon=9.99, label="Start"),
+            transport_modes=["walk", "publicTransport"],
+            steps=[
+                ItineraryStepDraft(
+                    id="step-1",
+                    type="sightsee",
+                    title="Sightsee",
+                    details="nearby",
+                    time=TimeConstraint(duration_minutes=30),
+                    location=LocationConstraint(
+                        type="exactPoint",
+                        point=GeoCoordinate(lat=48.4035, lon=9.9935),
+                    ),
+                )
+            ],
+        )
+    )
+
+    await _collect_sse_until_done(service, session_id)
+    snapshot = await service.get_session(session_id)
+    await service.close()
+
+    assert snapshot.state == "failed"
+    assert snapshot.final_plan is None
+    assert (
+        snapshot.last_message == "No reachable route was found for a required trip leg."
+    )
+
+
+@pytest.mark.asyncio
 async def test_answer_question_validates_current_question() -> None:
     repository = _FakeTripPlanningRepository()
     service = TripPlanningService(

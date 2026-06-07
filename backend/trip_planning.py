@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
+import math
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -36,6 +38,9 @@ from valhalla import (
 
 SESSION_TABLE = "trip_planning_session"
 EVENT_TABLE = "trip_planning_event"
+NEARBY_DIRECT_WALK_METERS = 15.0
+
+logger = logging.getLogger(__name__)
 
 
 class TripPlanningError(Exception):
@@ -451,6 +456,7 @@ class TripPlanningService:
                     )
             raise
         except Exception as exc:
+            logger.exception("Trip-planning session %s failed", session_id)
             message = str(exc) or "Trip planning failed."
             await self._repository.update_session(
                 session_id,
@@ -617,6 +623,10 @@ class TripPlanner:
         modes: list[TransportMode],
         depart_at: datetime,
     ) -> RouteCandidate:
+        distance_meters = _distance_meters(start, destination)
+        if distance_meters <= NEARBY_DIRECT_WALK_METERS:
+            return _direct_walk_route(start, destination, distance_meters)
+
         candidates: list[RouteCandidate] = []
         for mode in modes:
             try:
@@ -905,6 +915,46 @@ def _same_place(first: GeoCoordinate, second: GeoCoordinate) -> bool:
     )
 
 
+def _distance_meters(first: GeoCoordinate, second: GeoCoordinate) -> float:
+    radius_meters = 6371000.0
+    first_lat = math.radians(first.lat)
+    second_lat = math.radians(second.lat)
+    delta_lat = math.radians(second.lat - first.lat)
+    delta_lon = math.radians(second.lon - first.lon)
+    haversine = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(first_lat) * math.cos(second_lat) * math.sin(delta_lon / 2) ** 2
+    )
+    return 2 * radius_meters * math.asin(math.sqrt(haversine))
+
+
+def _direct_walk_route(
+    start: GeoCoordinate, destination: GeoCoordinate, distance_meters: float
+) -> RouteCandidate:
+    duration_seconds = max(30, round(distance_meters / 1.4))
+    geometry = [
+        GeoCoordinate(lat=start.lat, lon=start.lon, label=start.label),
+        GeoCoordinate(
+            lat=destination.lat, lon=destination.lon, label=destination.label
+        ),
+    ]
+    description = _walk_description(distance_meters, duration_seconds)
+    return RouteCandidate(
+        mode="walk",
+        duration_seconds=duration_seconds,
+        distance_meters=distance_meters,
+        geometry=geometry,
+        description=description,
+        segments=[
+            TripRouteSegment(
+                transport_mode="walk",
+                geometry=geometry,
+                description=description,
+            )
+        ],
+    )
+
+
 def _valhalla_costing(mode: TransportMode) -> CostingType:
     if mode == "walk":
         return "pedestrian"
@@ -924,6 +974,16 @@ def _route_description(
 ) -> str:
     distance = "" if length_km is None else f" over {length_km:.1f} km"
     return f"{mode} route{distance}, about {_minutes(duration_seconds)} min."
+
+
+def _walk_description(distance_meters: float, duration_seconds: int) -> str:
+    minutes = _minutes(duration_seconds)
+    if distance_meters < 1000:
+        distance = f"{round(distance_meters)} m"
+    else:
+        distance = f"{distance_meters / 1000:.1f} km"
+    duration = "less than 1 min" if minutes < 1 else f"about {minutes} min"
+    return f"Walk {distance}, {duration}."
 
 
 def _transport_mode_label(mode: TransportMode) -> str:

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
@@ -16,6 +18,7 @@ import 'package:meander/features/trip_planning/model/itinerary_step_draft.dart';
 import 'package:meander/features/trip_planning/model/location_constraint.dart';
 import 'package:meander/features/trip_planning/model/pending_trip_location_pick.dart';
 import 'package:meander/features/trip_planning/model/trip_plan.dart';
+import 'package:meander/features/trip_planning/model/trip_planning_session.dart';
 import 'package:meander/features/trip_planning/services/trip_planning_api_service.dart';
 import 'package:meander/features/trip_planning/widgets/trip_composer_panel.dart';
 
@@ -34,7 +37,12 @@ void main() {
       dispose: (manager) => manager.dispose(),
     );
     di.registerLazySingleton<TripPlanningApiService>(
-      () => TripPlanningApiService(di<ApiClient>()),
+      () => _FakeTripPlanningApiService(),
+      dispose: (service) {
+        if (service is _FakeTripPlanningApiService) {
+          return service.close();
+        }
+      },
     );
     di.registerLazySingleton<TripDraftManager>(
       () => TripDraftManager(di<LocalPersistenceService>()),
@@ -102,6 +110,42 @@ void main() {
     await _pumpPanel(tester);
 
     expect(find.byTooltip('Insert activity here'), findsNWidgets(2));
+  });
+
+  testWidgets('resets current draft from header action', (tester) async {
+    var closed = false;
+    final manager = di<TripDraftManager>();
+    manager.addStep(
+      type: ItineraryStepType.shop,
+      details: 'clothes',
+      location: LocationConstraint.wherever(),
+    );
+    manager.beginLocationPick(
+      index: 0,
+      type: ItineraryStepType.walk,
+      details: 'parks',
+      durationMinutes: 60,
+      kind: TripLocationPickKind.aroundPoint,
+    );
+    di<MapInteractionManager>().setMode(MapInteractionMode.selectPoint);
+    await manager.saveNow();
+
+    await _pumpPanel(tester, onClose: () => closed = true);
+
+    await tester.tap(find.byTooltip('Reset trip draft'));
+    await tester.pump();
+
+    expect(closed, isTrue);
+    expect(manager.draft, isNull);
+    expect(manager.pendingLocationPick, isNull);
+    expect(di<MapInteractionManager>().mode, MapInteractionMode.browse);
+    expect(
+      await di<LocalPersistenceService>().getJson(
+        namespace: 'tripDrafts',
+        id: 'active',
+      ),
+      isNull,
+    );
   });
 
   testWidgets('shows start and end location inputs and starts map picking', (
@@ -331,6 +375,47 @@ void main() {
     expect(di<TripPlanManager>().currentPlan, isNull);
     expect(find.text('Add activity'), findsOneWidget);
   });
+
+  testWidgets('surfaces planning error returned by backend', (tester) async {
+    final manager = di<TripDraftManager>();
+    manager.addStep(
+      type: ItineraryStepType.shop,
+      details: 'books',
+      location: LocationConstraint.wherever(),
+    );
+
+    await _pumpPanel(tester);
+    await tester.tap(find.text('Plan trip'));
+    await tester.pump();
+
+    (di<TripPlanningApiService>() as _FakeTripPlanningApiService).emit(
+      const TripPlanningEvent(
+        type: TripPlanningEventType.error,
+        message: 'No reachable route was found for a required trip leg.',
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.text('No reachable route was found for a required trip leg.'),
+      findsOneWidget,
+    );
+    expect(find.byType(SnackBar), findsOneWidget);
+    expect(
+      find.text(
+        'Trip planning failed: No reachable route was found for a required trip leg.',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byTooltip('Dismiss planning error'));
+    await tester.pump();
+
+    expect(
+      find.text('No reachable route was found for a required trip leg.'),
+      findsNothing,
+    );
+  });
 }
 
 Future<void> _pumpPanel(
@@ -369,4 +454,22 @@ TripPlan _reviewPlan() {
       ),
     ],
   );
+}
+
+class _FakeTripPlanningApiService extends TripPlanningApiService {
+  _FakeTripPlanningApiService() : super(ApiClient(baseUrl: 'http://api.test'));
+
+  final _controller = StreamController<TripPlanningEvent>.broadcast();
+
+  @override
+  Future<String> startSession(TripPlanningRequest request) async => 'session-1';
+
+  @override
+  Stream<TripPlanningEvent> watchEvents(String sessionId) => _controller.stream;
+
+  void emit(TripPlanningEvent event) {
+    _controller.add(event);
+  }
+
+  Future<void> close() => _controller.close();
 }
