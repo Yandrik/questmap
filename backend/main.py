@@ -1,6 +1,8 @@
+import logging
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-import logging
+from os import getenv
 from typing import Any
 
 import httpx
@@ -37,6 +39,39 @@ from trip_planning_models import (
 )
 from valhalla import ValhallaClient, ValhallaRouteRequest
 
+
+def _configure_logging() -> None:
+    level_name = getenv("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(
+            logging.Formatter(
+                "%(levelname)s:%(name)s:%(message)s",
+            )
+        )
+        root_logger.addHandler(handler)
+    root_logger.setLevel(level)
+    for logger_name in (
+        "main",
+        "trip_planning",
+        "pydantic_ai_local",
+        "uvicorn",
+        "uvicorn.error",
+        "uvicorn.access",
+    ):
+        logging.getLogger(logger_name).setLevel(level)
+    for logger_name in (
+        "httpcore",
+        "httpx",
+        "websockets",
+        "websockets.client",
+    ):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
+
+_configure_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -226,7 +261,14 @@ def _normalize_transit_plan_time(body: MotisPlanRequest) -> MotisPlanRequest:
 async def create_trip_planning_session(
     body: TripPlanningRequest, request: Request
 ) -> TripPlanningStartResponse:
+    logger.info(
+        "Create trip-planning session request draft_id=%s steps=%s modes=%s",
+        body.draft_id,
+        len(body.steps),
+        body.transport_modes,
+    )
     session_id = await request.app.state.trip_planning.start_session(body)
+    logger.info("Create trip-planning session accepted session_id=%s", session_id)
     return TripPlanningStartResponse(session_id=session_id)
 
 
@@ -235,8 +277,15 @@ async def get_trip_planning_session(
     session_id: str, request: Request
 ) -> TripPlanningSessionSnapshot:
     try:
-        return await request.app.state.trip_planning.get_session(session_id)
+        snapshot = await request.app.state.trip_planning.get_session(session_id)
+        logger.info(
+            "Get trip-planning session session_id=%s state=%s",
+            session_id,
+            snapshot.state,
+        )
+        return snapshot
     except SessionNotFoundError as exc:
+        logger.warning("Get trip-planning session not found session_id=%s", session_id)
         raise HTTPException(status_code=404, detail="Session not found") from exc
 
 
@@ -246,9 +295,20 @@ async def stream_trip_planning_events(
 ) -> StreamingResponse:
     try:
         await request.app.state.trip_planning.get_session(session_id)
+        logger.info("Stream trip-planning events request session_id=%s", session_id)
         stream = request.app.state.trip_planning.stream_events(session_id)
-        return StreamingResponse(stream, media_type="text/event-stream")
+        return StreamingResponse(
+            stream,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
     except SessionNotFoundError as exc:
+        logger.warning(
+            "Stream trip-planning events not found session_id=%s", session_id
+        )
         raise HTTPException(status_code=404, detail="Session not found") from exc
 
 
@@ -259,20 +319,46 @@ async def answer_trip_planning_question(
     request: Request,
 ) -> None:
     try:
+        logger.info(
+            "Answer trip-planning question request session_id=%s question_id=%s",
+            session_id,
+            body.question_id,
+        )
         await request.app.state.trip_planning.answer_question(session_id, body)
     except SessionNotFoundError as exc:
+        logger.warning(
+            "Answer trip-planning question session not found session_id=%s",
+            session_id,
+        )
         raise HTTPException(status_code=404, detail="Session not found") from exc
     except StaleAnswerError as exc:
+        logger.warning(
+            "Answer trip-planning question stale session_id=%s question_id=%s error=%s",
+            session_id,
+            body.question_id,
+            exc,
+        )
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except InvalidAnswerError as exc:
+        logger.warning(
+            "Answer trip-planning question invalid session_id=%s "
+            "question_id=%s error=%s",
+            session_id,
+            body.question_id,
+            exc,
+        )
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/trip-planning/sessions/{session_id}/cancel", status_code=204)
 async def cancel_trip_planning_session(session_id: str, request: Request) -> None:
     try:
+        logger.info("Cancel trip-planning session request session_id=%s", session_id)
         await request.app.state.trip_planning.cancel_session(session_id)
     except SessionNotFoundError as exc:
+        logger.warning(
+            "Cancel trip-planning session not found session_id=%s", session_id
+        )
         raise HTTPException(status_code=404, detail="Session not found") from exc
 
 

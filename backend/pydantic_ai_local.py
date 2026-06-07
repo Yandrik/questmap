@@ -1,19 +1,22 @@
 from __future__ import annotations
 
+# ruff: noqa: E501
 import base64
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from os import getenv
 from typing import Any, Literal
 
 from dotenv import load_dotenv
-
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, Field
 from pydantic_ai import Agent, BinaryContent, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 from surrealdb import AsyncSurreal
+
+logger = logging.getLogger(__name__)
 
 
 class Address(BaseModel):
@@ -31,7 +34,7 @@ class LocationGeometry(BaseModel):
 
 
 class LocationProperties(BaseModel):
-    #model_config = ConfigDict(populate_by_name=True, extra="allow")
+    # model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     osm_type: str | None = None
     osm_id: int | None = None
@@ -61,7 +64,7 @@ class LocationsObject(BaseModel):
     geometry: LocationGeometry
     properties: LocationProperties
 
-    '''def to_locations_of_interest(self) -> TripLocations:
+    """def to_locations_of_interest(self) -> TripLocations:
         return TripLocations(
             city=(self.properties.address.city if self.properties.address else None)
             or self.properties.name
@@ -69,7 +72,7 @@ class LocationsObject(BaseModel):
             lat=self.geometry.coordinates[1],
             lon=self.geometry.coordinates[0],
             category="other",
-        )'''
+        )"""
 
 
 class TripPlanInput(BaseModel):
@@ -79,12 +82,12 @@ class TripPlanInput(BaseModel):
     max_stops: int = 30
     radius_meters: int = 5000
 
-    '''@field_validator("trip_locations", mode="before")
+    """@field_validator("trip_locations", mode="before")
     @classmethod
     def _normalize_geojson_feature(cls, value: Any) -> Any:
         if isinstance(value, dict) and value.get("type") == "Feature":
             return [LocationsObject.model_validate(value).to_locations_of_interest()]
-        return value'''
+        return value"""
 
 
 class TripPlanOutput(BaseModel):
@@ -129,6 +132,14 @@ async def search_pois(
     category: str | None = None,
 ) -> str:
     """Search SurrealDB for nearby points of interest around a coordinate."""
+    logger.info(
+        "Agent tool search_pois started city=%s center=%.5f,%.5f radius_meters=%s category=%s",
+        city,
+        lat,
+        lon,
+        radius_meters,
+        category,
+    )
     db_url = getenv("SURREALDB_URL", "ws://localhost:8001")
     db_ns = getenv("SURREALDB_NAMESPACE", "main")
     db_name = getenv("SURREALDB_DATABASE", "main")
@@ -156,14 +167,29 @@ async def search_pois(
         for item in serializable_result
         if isinstance(item, dict)
     ]
-    #print(f"search_pois result: {filtered_result}")
+    logger.info(
+        "Agent tool search_pois completed city=%s category=%s count=%s",
+        city,
+        category,
+        len(filtered_result),
+    )
+    logger.debug(
+        "Agent tool search_pois result osm_ids=%s",
+        [item.get("osm_id") for item in filtered_result[:10]],
+    )
     return json.dumps(filtered_result, ensure_ascii=False)
+
 
 async def search_closest_city(
     lat: float,
     lon: float,
 ) -> str:
     """Search SurrealDB for nearby points of interest around a coordinate."""
+    logger.info(
+        "Agent tool search_closest_city started center=%.5f,%.5f",
+        lat,
+        lon,
+    )
     db_url = getenv("SURREALDB_URL", "ws://localhost:8001")
     db_ns = getenv("SURREALDB_NAMESPACE", "main")
     db_name = getenv("SURREALDB_DATABASE", "main")
@@ -186,7 +212,12 @@ async def search_closest_city(
         for item in serializable_result
         if isinstance(item, dict)
     ]
-    #print(f"search_pois result: {filtered_result}")
+    logger.info(
+        "Agent tool search_closest_city completed center=%.5f,%.5f count=%s",
+        lat,
+        lon,
+        len(filtered_result),
+    )
     return json.dumps(filtered_result, ensure_ascii=False)
 
 
@@ -197,8 +228,17 @@ async def prompt_user(
     suggestions: list[str | dict[str, Any]] | None = None,
 ) -> str:
     """Non-blocking placeholder for agent clarification prompts."""
+    logger.info(
+        "Agent requested user prompt session_id=%s prompt_type=%s suggestions=%s",
+        ctx.deps.session_id,
+        prompt_type,
+        len(suggestions or []),
+    )
     if ctx.deps.ask_user is None or ctx.deps.session_id is None:
-        print(f"Prompting user {prompt_type}: {message},\n{suggestions}")
+        logger.warning(
+            "Agent user prompt has no API callback; using fallback answer prompt_type=%s",
+            prompt_type,
+        )
         return (
             f"Question deferred to API workflow: {message}\n"
             "Just use the first object in the list of suggestions as the answer "
@@ -211,6 +251,11 @@ async def prompt_user(
         message,
         suggestions,
     )
+    logger.info(
+        "Agent user prompt answered session_id=%s prompt_type=%s",
+        ctx.deps.session_id,
+        prompt_type,
+    )
     return json.dumps(answer, ensure_ascii=False)
 
 
@@ -221,6 +266,14 @@ async def plan_trip(
 ) -> TripPlanOutput:
     agent = _build_agent()
     prompt = _planning_prompt(inp)
+    logger.info(
+        "Agent trip planning run started session_id=%s locations=%s max_stops=%s radius_meters=%s prompt_chars=%s",
+        session_id,
+        len(inp.trip_locations),
+        inp.max_stops,
+        inp.radius_meters,
+        len(prompt),
+    )
     result = await agent.run(
         prompt,
         deps=Deps(
@@ -232,9 +285,16 @@ async def plan_trip(
             session_id=session_id,
             ask_user=ask_user,
         ),
-        #model_settings={"temperature": 0.2},
+        # model_settings={"temperature": 0.2},
     )
-    return TripPlanOutput.model_validate(result.output)
+    output = TripPlanOutput.model_validate(result.output)
+    logger.info(
+        "Agent trip planning run completed session_id=%s ordered_groups=%s warnings=%s",
+        session_id,
+        len(output.ordered_points),
+        len(output.warnings),
+    )
+    return output
 
 
 def _build_agent() -> Agent[Any, Any]:
@@ -242,13 +302,18 @@ def _build_agent() -> Agent[Any, Any]:
     if not base_url:
         raise RuntimeError("BACKENDPOINT_URL must be set to run the local agent.")
     model_name = getenv("PLANNING_AGENT_MODEL", "Qwen3.6-27B-MTP-GGUF")
+    logger.info(
+        "Building trip-planning agent model=%s backend_url=%s",
+        model_name,
+        base_url,
+    )
     model = OpenAIChatModel(
         model_name=model_name,
         provider=OpenAIProvider(base_url=base_url),
     )
     settings = OpenAIResponsesModelSettings(
         openai_reasoning_effort="low",
-        openai_reasoning_summary='concise',
+        openai_reasoning_summary="concise",
     )
     agent: Agent[Any, Any] = Agent(
         model=model,
@@ -257,12 +322,22 @@ def _build_agent() -> Agent[Any, Any]:
         system_prompt="You're a helpful local trip-planning assistant.",
     )
     agent.tool_plain(search_pois)
-    #agent.tool_plain(search_closest_city)
+    # agent.tool_plain(search_closest_city)
     agent.tool(prompt_user, sequential=True)
+    logger.debug(
+        "Trip-planning agent tools registered tools=%s", ["search_pois", "prompt_user"]
+    )
     return agent
 
 
 def _planning_prompt(inp: TripPlanInput) -> str:
+    logger.debug(
+        "Building planning prompt start=%s end=%s locations=%s has_heatmap=%s",
+        inp.start_point,
+        inp.end_point,
+        len(inp.trip_locations),
+        any(location.heatmap_image_b64 for location in inp.trip_locations),
+    )
     prompt = f"""
 Plan a city trip route using the heatmap image and map context.
 
@@ -333,9 +408,7 @@ def _poi_query(
     radius_meters: int,
     category: str | None,
 ) -> tuple[str, dict[str, Any]]:
-    if category == "sightseeing":
-        category = ["tourism", "historic"]
-    else: category = [category]
+    category = ["tourism", "historic"] if category == "sightseeing" else [category]
     category_clause = (
         """
         AND (primary_type in $category OR tags.category in $category OR primary_family in $category)
@@ -388,6 +461,7 @@ def _closest_city_query(lat: float, lon: float) -> tuple[str, dict[str, Any]]:
             "lon": lon,
         },
     )
+
 
 def _jsonable(value: Any) -> Any:
     if value is None or isinstance(value, str | int | float | bool):
@@ -443,7 +517,7 @@ if __name__ == "__main__":
                 lon=9.987222,
                 category="sightseeing",
                 notes="Spaceport",
-            )
+            ),
         ],
         max_stops=5,
         radius_meters=8000,

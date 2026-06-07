@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import '../../../_shared/services/api_client.dart';
 import '../model/trip_planning_session.dart';
 
@@ -19,9 +21,21 @@ class TripPlanningApiService {
   }
 
   Stream<TripPlanningEvent> watchEvents(String sessionId) {
-    return _apiClient
-        .sse('/trip-planning/sessions/$sessionId/events')
-        .map(TripPlanningEvent.fromSse);
+    return _apiClient.sse('/trip-planning/sessions/$sessionId/events').map((
+      sse,
+    ) {
+      final event = TripPlanningEvent.fromSse(sse);
+      debugPrint(
+        'TripPlanningApiService received SSE '
+        'sessionId=$sessionId '
+        'sseType=${sse.type} '
+        'eventType=${event.type.apiValue} '
+        'questionId=${event.question?.id} '
+        'options=${event.question?.options.length ?? 0} '
+        'message=${event.message}',
+      );
+      return event;
+    });
   }
 
   Future<void> answerQuestion({

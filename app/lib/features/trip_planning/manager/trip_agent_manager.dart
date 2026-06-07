@@ -24,6 +24,7 @@ class TripAgentManager extends ChangeNotifier {
   final LocalPersistenceService _persistenceService;
 
   StreamSubscription<TripPlanningEvent>? _eventsSubscription;
+  int _eventsSubscriptionGeneration = 0;
   String? _sessionId;
   bool _isPlanning = false;
   String? _statusMessage;
@@ -39,6 +40,7 @@ class TripAgentManager extends ChangeNotifier {
   TripPlan? get partialPlan => _partialPlan;
 
   Future<void> startPlanning(TripDraft draft) async {
+    _eventsSubscriptionGeneration++;
     await _eventsSubscription?.cancel();
     _isPlanning = true;
     _statusMessage = 'Considering trip plans...';
@@ -56,10 +58,9 @@ class TripAgentManager extends ChangeNotifier {
         steps: draft.steps,
       );
       _sessionId = await _apiService.startSession(request);
+      debugPrint('TripAgentManager started planning sessionId=$_sessionId');
       await _persistSession('running');
-      _eventsSubscription = _apiService
-          .watchEvents(_sessionId!)
-          .listen(_handleEvent, onError: _handleError, cancelOnError: false);
+      _subscribeToEvents(_sessionId!, _eventsSubscriptionGeneration);
       notifyListeners();
     } on Exception catch (error) {
       _isPlanning = false;
@@ -72,6 +73,13 @@ class TripAgentManager extends ChangeNotifier {
     final sessionId = _sessionId;
     final question = _question;
     if (sessionId == null || question == null) return;
+    debugPrint(
+      'TripAgentManager sending answer '
+      'sessionId=$sessionId '
+      'questionId=${question.id} '
+      'kind=${question.kind.apiValue} '
+      'value=$value',
+    );
     await _apiService.answerQuestion(
       sessionId: sessionId,
       answer: TripPlanningAnswer(questionId: question.id, value: value),
@@ -83,12 +91,13 @@ class TripAgentManager extends ChangeNotifier {
 
   Future<void> cancelPlanning() async {
     final sessionId = _sessionId;
+    _eventsSubscriptionGeneration++;
+    _isPlanning = false;
     await _eventsSubscription?.cancel();
     _eventsSubscription = null;
     if (sessionId != null) {
       await _apiService.cancelSession(sessionId);
     }
-    _isPlanning = false;
     _question = null;
     _statusMessage = 'Planning cancelled.';
     await _persistSession('cancelled');
@@ -100,7 +109,67 @@ class TripAgentManager extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _subscribeToEvents(String sessionId, int generation) {
+    debugPrint(
+      'TripAgentManager subscribing to SSE '
+      'sessionId=$sessionId generation=$generation',
+    );
+    _eventsSubscription = _apiService
+        .watchEvents(sessionId)
+        .listen(
+          (event) {
+            if (_isStaleEventStream(sessionId, generation)) {
+              debugPrint(
+                'TripAgentManager ignoring stale SSE '
+                'sessionId=$sessionId generation=$generation '
+                'activeSessionId=$_sessionId activeGeneration=$_eventsSubscriptionGeneration',
+              );
+              return;
+            }
+            unawaited(_handleEvent(event));
+          },
+          onError: (error, stackTrace) {
+            if (_isStaleEventStream(sessionId, generation)) return;
+            _handleError(error, stackTrace);
+          },
+          onDone: () {
+            if (_isStaleEventStream(sessionId, generation)) return;
+            debugPrint(
+              'TripAgentManager SSE stream closed '
+              'sessionId=$sessionId generation=$generation isPlanning=$_isPlanning',
+            );
+            if (_isPlanning) {
+              unawaited(_reconnectEvents(sessionId, generation));
+            }
+          },
+          cancelOnError: false,
+        );
+  }
+
+  bool _isStaleEventStream(String sessionId, int generation) {
+    return sessionId != _sessionId ||
+        generation != _eventsSubscriptionGeneration;
+  }
+
+  Future<void> _reconnectEvents(String sessionId, int generation) async {
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    if (_isStaleEventStream(sessionId, generation) || !_isPlanning) return;
+    debugPrint(
+      'TripAgentManager reconnecting SSE '
+      'sessionId=$sessionId generation=$generation',
+    );
+    _subscribeToEvents(sessionId, generation);
+  }
+
   Future<void> _handleEvent(TripPlanningEvent event) async {
+    debugPrint(
+      'TripAgentManager handling SSE '
+      'sessionId=$_sessionId '
+      'type=${event.type.apiValue} '
+      'questionId=${event.question?.id} '
+      'options=${event.question?.options.length ?? 0} '
+      'message=${event.message}',
+    );
     switch (event.type) {
       case TripPlanningEventType.status:
         _statusMessage = event.message ?? _statusMessage;
@@ -134,6 +203,7 @@ class TripAgentManager extends ChangeNotifier {
   }
 
   void _handleError(Object error, StackTrace stackTrace) {
+    debugPrint('TripAgentManager SSE error sessionId=$_sessionId error=$error');
     _isPlanning = false;
     _question = null;
     _errorMessage = error.toString();

@@ -105,15 +105,68 @@ void main() {
     expect(restored.completedItemIds, contains('item-1'));
     expect(restored.isTripActive, isTrue);
   });
+
+  test('reconnects event stream when it closes while planning', () async {
+    final draft =
+        TripDraft.empty(
+          id: 'draft-1',
+          startLocation: const GeoCoordinate(lat: 48.4, lon: 9.99),
+        ).copyWith(
+          transportModes: const {TransportMode.walk},
+          steps: [
+            ItineraryStepDraft.create(
+              id: 'step-1',
+              type: ItineraryStepType.shop,
+              details: 'gifts',
+              time: const TimeConstraint(durationMinutes: 45),
+              location: LocationConstraint.wherever(),
+            ),
+          ],
+        );
+
+    await agentManager.startPlanning(draft);
+    expect(api.watchEventsCount, 1);
+
+    api.emit(
+      const TripPlanningEvent(
+        type: TripPlanningEventType.status,
+        message: 'Finding places near your route...',
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await api.closeCurrentStream();
+
+    await Future<void>.delayed(const Duration(milliseconds: 650));
+    expect(api.watchEventsCount, 2);
+
+    api.emit(
+      TripPlanningEvent(
+        type: TripPlanningEventType.question,
+        question: const TripPlanningQuestion(
+          id: 'q1',
+          kind: TripPlanningQuestionKind.selection,
+          prompt: 'Choose a shop',
+          options: [TripQuestionOption(id: 'shop-1', title: 'Gift Shop')],
+        ),
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(agentManager.question!.id, 'q1');
+    await agentManager.answerQuestion('shop-1');
+    expect(api.lastAnswer!.questionId, 'q1');
+    expect(api.lastAnswer!.value, 'shop-1');
+  });
 }
 
 class _FakeTripPlanningApiService extends TripPlanningApiService {
   _FakeTripPlanningApiService() : super(ApiClient(baseUrl: 'http://api.test'));
 
-  final _controller = StreamController<TripPlanningEvent>.broadcast();
+  final _controllers = <StreamController<TripPlanningEvent>>[];
   TripPlanningRequest? lastRequest;
   TripPlanningAnswer? lastAnswer;
   bool cancelled = false;
+  int watchEventsCount = 0;
 
   @override
   Future<String> startSession(TripPlanningRequest request) async {
@@ -122,7 +175,12 @@ class _FakeTripPlanningApiService extends TripPlanningApiService {
   }
 
   @override
-  Stream<TripPlanningEvent> watchEvents(String sessionId) => _controller.stream;
+  Stream<TripPlanningEvent> watchEvents(String sessionId) {
+    watchEventsCount++;
+    final controller = StreamController<TripPlanningEvent>.broadcast();
+    _controllers.add(controller);
+    return controller.stream;
+  }
 
   @override
   Future<void> answerQuestion({
@@ -138,8 +196,14 @@ class _FakeTripPlanningApiService extends TripPlanningApiService {
   }
 
   void emit(TripPlanningEvent event) {
-    _controller.add(event);
+    _controllers.last.add(event);
   }
 
-  Future<void> close() => _controller.close();
+  Future<void> closeCurrentStream() => _controllers.last.close();
+
+  Future<void> close() async {
+    for (final controller in _controllers) {
+      await controller.close();
+    }
+  }
 }

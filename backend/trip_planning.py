@@ -21,18 +21,18 @@ from trip_planning_models import (
     ItineraryStepDraft,
     ItineraryStepType,
     LocationConstraint,
+    TransitLegDetails,
     TransportMode,
     TripPlan,
     TripPlanItem,
-    TripQuestionOption,
     TripPlanningAnswer,
     TripPlanningEventPayload,
     TripPlanningQuestion,
     TripPlanningQuestionKind,
     TripPlanningRequest,
     TripPlanningSessionSnapshot,
+    TripQuestionOption,
     TripRouteSegment,
-    TransitLegDetails,
 )
 from valhalla import (
     CostingType,
@@ -145,6 +145,14 @@ class SurrealTripPlanningRepository:
     async def create_session(
         self, session_id: str, request: TripPlanningRequest, now: datetime
     ) -> TripPlanningSessionSnapshot:
+        logger.info(
+            "Creating trip-planning session session_id=%s draft_id=%s "
+            "steps=%s modes=%s",
+            session_id,
+            request.draft_id,
+            len(request.steps),
+            request.transport_modes,
+        )
         record = {
             "sessionId": session_id,
             "draftId": request.draft_id,
@@ -170,6 +178,12 @@ class SurrealTripPlanningRepository:
     async def update_session(
         self, session_id: str, updates: dict[str, Any]
     ) -> TripPlanningSessionSnapshot:
+        logger.debug(
+            "Updating trip-planning session session_id=%s fields=%s state=%s",
+            session_id,
+            sorted(updates.keys()),
+            updates.get("state"),
+        )
         updates = {**updates, "updatedAt": _utc_now().isoformat()}
         record = await self._db.merge(_session_record_id(session_id), updates)
         if record is None:
@@ -198,6 +212,13 @@ class SurrealTripPlanningRepository:
                 "eventCount": sequence + 1,
                 "updatedAt": created_at.isoformat(),
             },
+        )
+        logger.info(
+            "Appended trip-planning event session_id=%s sequence=%s type=%s message=%s",
+            session_id,
+            sequence,
+            payload.type,
+            payload.message,
         )
         return StoredPlanningEvent(
             sequence=sequence,
@@ -250,6 +271,14 @@ class SurrealTripPlanningRepository:
                 else:
                     category_clause = " AND primary_type IN $types"
 
+        logger.debug(
+            "Searching POIs center=%s radius_meters=%.0f families=%s types=%s limit=%s",
+            _coord_log(center),
+            radius_meters,
+            category_filter.families if category_filter else (),
+            category_filter.types if category_filter else (),
+            limit,
+        )
         try:
             records = await self._db.query(
                 f"""
@@ -271,10 +300,25 @@ class SurrealTripPlanningRepository:
                 variables,
             )
         except SurrealError:
+            logger.exception(
+                "POI search failed center=%s radius_meters=%.0f",
+                _coord_log(center),
+                radius_meters,
+            )
             return []
         if not isinstance(records, list):
+            logger.warning(
+                "POI search returned unexpected result type=%s", type(records)
+            )
             return []
-        return [_poi_from_record(record) for record in records]
+        candidates = [_poi_from_record(record) for record in records]
+        logger.info(
+            "POI search completed center=%s radius_meters=%.0f count=%s",
+            _coord_log(center),
+            radius_meters,
+            len(candidates),
+        )
+        return candidates
 
     async def _select_one(self, record_id: RecordID) -> dict[str, Any] | None:
         result = await self._db.select(record_id)
@@ -296,17 +340,34 @@ class TripPlanningEventBus:
     async def subscribe(self, session_id: str) -> AsyncIterator[asyncio.Queue[None]]:
         queue: asyncio.Queue[None] = asyncio.Queue()
         self._subscribers.setdefault(session_id, set()).add(queue)
+        logger.info(
+            "Trip-planning SSE subscriber added session_id=%s subscribers=%s",
+            session_id,
+            len(self._subscribers.get(session_id, ())),
+        )
         try:
             yield queue
         finally:
             subscribers = self._subscribers.get(session_id)
             if subscribers is not None:
                 subscribers.discard(queue)
+                logger.info(
+                    "Trip-planning SSE subscriber removed session_id=%s "
+                    "subscribers=%s",
+                    session_id,
+                    len(subscribers),
+                )
                 if not subscribers:
                     self._subscribers.pop(session_id, None)
 
     def publish(self, session_id: str) -> None:
-        for queue in self._subscribers.get(session_id, set()):
+        subscribers = self._subscribers.get(session_id, set())
+        logger.info(
+            "Publishing trip-planning event wakeup session_id=%s subscribers=%s",
+            session_id,
+            len(subscribers),
+        )
+        for queue in subscribers:
             queue.put_nowait(None)
 
 
@@ -331,6 +392,10 @@ class TripPlanningService:
             self._planner = AgentTripPlanner(repository, self.ask_user)
         else:
             self._planner = TripPlanner(repository, valhalla, motis)
+        logger.info(
+            "Trip-planning service initialized planner=%s",
+            type(self._planner).__name__,
+        )
 
     async def start_session(self, request: TripPlanningRequest) -> str:
         session_id = uuid4().hex
@@ -338,6 +403,12 @@ class TripPlanningService:
         task = asyncio.create_task(self._run_session(session_id))
         self._tasks[session_id] = task
         task.add_done_callback(lambda _: self._tasks.pop(session_id, None))
+        logger.info(
+            "Started trip-planning session session_id=%s draft_id=%s steps=%s",
+            session_id,
+            request.draft_id,
+            len(request.steps),
+        )
         return session_id
 
     async def get_session(self, session_id: str) -> TripPlanningSessionSnapshot:
@@ -353,6 +424,12 @@ class TripPlanningService:
         if question.id != answer.question_id:
             raise StaleAnswerError("Answer does not match current question")
         _validate_answer_value(question, answer.value)
+        logger.info(
+            "Received trip-planning answer session_id=%s question_id=%s kind=%s",
+            session_id,
+            answer.question_id,
+            question.kind,
+        )
         await self._repository.update_session(
             session_id,
             {
@@ -413,6 +490,14 @@ class TripPlanningService:
         )
         future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self._pending_answers[session_id] = (question.id, future)
+        logger.info(
+            "Trip-planning session waiting for user session_id=%s "
+            "question_id=%s kind=%s options=%s",
+            session_id,
+            question.id,
+            kind,
+            len(question.options),
+        )
 
         await self._repository.update_session(
             session_id,
@@ -432,7 +517,13 @@ class TripPlanningService:
         )
 
         try:
-            return await future
+            answer = await future
+            logger.info(
+                "Trip-planning user question answered session_id=%s question_id=%s",
+                session_id,
+                question.id,
+            )
+            return answer
         finally:
             pending = self._pending_answers.get(session_id)
             if pending is not None and pending[0] == question.id:
@@ -441,8 +532,15 @@ class TripPlanningService:
     async def cancel_session(self, session_id: str) -> None:
         session = await self._repository.get_session(session_id)
         if session.state in {"completed", "failed", "cancelled"}:
+            logger.info(
+                "Ignoring trip-planning cancel for terminal session "
+                "session_id=%s state=%s",
+                session_id,
+                session.state,
+            )
             return
 
+        logger.info("Cancelling trip-planning session session_id=%s", session_id)
         task = self._tasks.get(session_id)
         if task is not None:
             task.cancel()
@@ -468,6 +566,7 @@ class TripPlanningService:
     async def stream_events(self, session_id: str) -> AsyncIterator[str]:
         await self._repository.get_session(session_id)
         next_sequence = -1
+        logger.info("Opening trip-planning event stream session_id=%s", session_id)
         async with self._event_bus.subscribe(session_id) as queue:
             while True:
                 events = await self._repository.list_events(
@@ -475,13 +574,55 @@ class TripPlanningService:
                 )
                 for event in events:
                     next_sequence = event.sequence
+                    logger.info(
+                        "Sending trip-planning SSE session_id=%s sequence=%s "
+                        "type=%s question_id=%s message=%s",
+                        session_id,
+                        event.sequence,
+                        event.payload.type,
+                        event.payload.question.id
+                        if event.payload.question is not None
+                        else None,
+                        event.payload.message,
+                    )
                     yield _sse(event.payload)
+                    logger.info(
+                        "Trip-planning SSE yielded frame session_id=%s sequence=%s "
+                        "type=%s",
+                        session_id,
+                        event.sequence,
+                        event.payload.type,
+                    )
                     if event.payload.type == "done":
+                        logger.info(
+                            "Closing trip-planning event stream session_id=%s "
+                            "final_sequence=%s",
+                            session_id,
+                            event.sequence,
+                        )
                         return
 
                 try:
+                    logger.info(
+                        "Trip-planning SSE waiting for wakeup session_id=%s "
+                        "after_sequence=%s",
+                        session_id,
+                        next_sequence,
+                    )
                     await asyncio.wait_for(queue.get(), timeout=15)
+                    logger.info(
+                        "Trip-planning SSE wakeup received session_id=%s "
+                        "after_sequence=%s",
+                        session_id,
+                        next_sequence,
+                    )
                 except TimeoutError:
+                    logger.info(
+                        "Sending trip-planning SSE keepalive session_id=%s "
+                        "after_sequence=%s",
+                        session_id,
+                        next_sequence,
+                    )
                     yield ": keepalive\n\n"
 
     async def close(self) -> None:
@@ -497,6 +638,7 @@ class TripPlanningService:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _run_session(self, session_id: str) -> None:
+        logger.info("Running trip-planning session session_id=%s", session_id)
         try:
             await self._repository.update_session(
                 session_id,
@@ -515,6 +657,11 @@ class TripPlanningService:
             await self._raise_if_cancelled(session_id)
 
             plan = await self._planner.build_plan(session_id)
+            logger.info(
+                "Trip-planning plan built session_id=%s items=%s",
+                session_id,
+                len(plan.items),
+            )
             await self._repository.update_session(
                 session_id,
                 {
@@ -537,6 +684,9 @@ class TripPlanningService:
                 TripPlanningEventPayload(type="done", message="done"),
             )
         except asyncio.CancelledError:
+            logger.info(
+                "Trip-planning session task cancelled session_id=%s", session_id
+            )
             with contextlib.suppress(SessionNotFoundError):
                 session = await self._repository.get_session(session_id)
                 if session.state != "cancelled":
@@ -602,15 +752,47 @@ class TripPlanner:
         cursor = request.start_location
         current_time = _initial_time(request)
         items: list[TripPlanItem] = []
+        logger.info(
+            "Building deterministic trip plan session_id=%s steps=%s start=%s end=%s",
+            session_id,
+            len(request.steps),
+            _coord_log(request.start_location),
+            _coord_log(request.end_location),
+        )
 
         for index, step in enumerate(request.steps, start=1):
+            logger.info(
+                "Planning step session_id=%s step_index=%s step_id=%s type=%s title=%s",
+                session_id,
+                index,
+                step.id,
+                step.type,
+                step.title,
+            )
             activity_location = await self._resolve_activity_location(step, cursor)
+            logger.info(
+                "Resolved step location session_id=%s step_index=%s "
+                "location=%s label=%s",
+                session_id,
+                index,
+                _coord_log(activity_location),
+                activity_location.label,
+            )
             if not _same_place(cursor, activity_location):
                 route = await self._route_between(
                     cursor,
                     activity_location,
                     request.transport_modes,
                     current_time,
+                )
+                logger.info(
+                    "Selected route for step session_id=%s step_index=%s "
+                    "mode=%s duration_seconds=%s distance_meters=%s",
+                    session_id,
+                    index,
+                    route.mode,
+                    route.duration_seconds,
+                    _round_optional(route.distance_meters),
                 )
                 travel_start = current_time
                 travel_end = current_time + timedelta(seconds=route.duration_seconds)
@@ -656,11 +838,25 @@ class TripPlanner:
         if request.end_location is not None and not _same_place(
             cursor, request.end_location
         ):
+            logger.info(
+                "Planning final route session_id=%s from=%s to=%s",
+                session_id,
+                _coord_log(cursor),
+                _coord_log(request.end_location),
+            )
             route = await self._route_between(
                 cursor,
                 request.end_location,
                 request.transport_modes,
                 current_time,
+            )
+            logger.info(
+                "Selected final route session_id=%s mode=%s "
+                "duration_seconds=%s distance_meters=%s",
+                session_id,
+                route.mode,
+                route.duration_seconds,
+                _round_optional(route.distance_meters),
             )
             items.append(
                 TripPlanItem(
@@ -690,6 +886,11 @@ class TripPlanner:
     ) -> GeoCoordinate:
         constraint = step.location
         if constraint.type == "exactPoint" and constraint.point is not None:
+            logger.debug(
+                "Using exact step location step_id=%s location=%s",
+                step.id,
+                _coord_log(constraint.point),
+            )
             return _with_default_label(constraint.point, step.title)
 
         if constraint.type == "aroundPoint" and constraint.point is not None:
@@ -710,7 +911,21 @@ class TripPlanner:
             limit=5,
         )
         if candidates:
+            logger.info(
+                "Using nearest POI for step step_id=%s candidates=%s "
+                "distance_meters=%s family=%s type=%s",
+                step.id,
+                len(candidates),
+                _round_optional(candidates[0].distance_meters),
+                candidates[0].primary_family,
+                candidates[0].primary_type,
+            )
             return _with_default_label(candidates[0].coordinate, step.title)
+        logger.info(
+            "No POI candidates found for step step_id=%s; using center=%s",
+            step.id,
+            _coord_log(center),
+        )
         return _with_default_label(center, step.title)
 
     async def _route_between(
@@ -722,11 +937,24 @@ class TripPlanner:
     ) -> RouteCandidate:
         distance_meters = _distance_meters(start, destination)
         if distance_meters <= NEARBY_DIRECT_WALK_METERS:
+            logger.info(
+                "Using direct nearby walk route from=%s to=%s distance_meters=%.1f",
+                _coord_log(start),
+                _coord_log(destination),
+                distance_meters,
+            )
             return _direct_walk_route(start, destination, distance_meters)
 
         candidates: list[RouteCandidate] = []
         for mode in modes:
             try:
+                logger.info(
+                    "Requesting route candidate mode=%s from=%s to=%s depart_at=%s",
+                    mode,
+                    _coord_log(start),
+                    _coord_log(destination),
+                    depart_at.isoformat(),
+                )
                 if mode == "publicTransport":
                     candidates.append(
                         await self._route_with_motis(start, destination, depart_at)
@@ -741,14 +969,28 @@ class TripPlanner:
                 KeyError,
                 ValueError,
                 TypeError,
-            ):
+            ) as exc:
+                logger.warning(
+                    "Route candidate failed mode=%s from=%s to=%s error=%s",
+                    mode,
+                    _coord_log(start),
+                    _coord_log(destination),
+                    exc,
+                )
                 continue
 
         if not candidates:
             raise RoutePlanningError(
                 "No reachable route was found for a required trip leg."
             )
-        return min(candidates, key=lambda candidate: candidate.duration_seconds)
+        selected = min(candidates, key=lambda candidate: candidate.duration_seconds)
+        logger.info(
+            "Route candidate selected mode=%s duration_seconds=%s alternatives=%s",
+            selected.mode,
+            selected.duration_seconds,
+            len(candidates),
+        )
+        return selected
 
     async def _route_with_valhalla(
         self,
@@ -757,6 +999,13 @@ class TripPlanner:
         mode: TransportMode,
     ) -> RouteCandidate:
         costing = _valhalla_costing(mode)
+        logger.debug(
+            "Calling Valhalla route mode=%s costing=%s from=%s to=%s",
+            mode,
+            costing,
+            _coord_log(start),
+            _coord_log(destination),
+        )
         response = await self._valhalla.route(
             ValhallaRouteRequest(
                 locations=[
@@ -787,6 +1036,14 @@ class TripPlanner:
             *_coordinates_from_any(trip.get("shape")),
             *_coordinates_from_valhalla_legs(trip.get("legs")),
         ]
+        logger.info(
+            "Valhalla route response mode=%s duration_seconds=%s "
+            "length_km=%s geometry_points=%s",
+            mode,
+            duration,
+            length_km,
+            len(geometry),
+        )
         return RouteCandidate(
             mode=mode,
             duration_seconds=duration,
@@ -808,6 +1065,12 @@ class TripPlanner:
         destination: GeoCoordinate,
         depart_at: datetime,
     ) -> RouteCandidate:
+        logger.debug(
+            "Calling MOTIS plan from=%s to=%s depart_at=%s",
+            _coord_log(start),
+            _coord_log(destination),
+            depart_at.isoformat(),
+        )
         response = await self._motis.plan(
             MotisPlanRequest(
                 fromPlace=_motis_place(start),
@@ -839,6 +1102,15 @@ class TripPlanner:
         distance = _motis_legs_distance(legs)
         geometry = _coordinates_from_motis_legs(legs)
         segments = _segments_from_motis_legs(legs)
+        logger.info(
+            "MOTIS route response duration_seconds=%s distance_meters=%s "
+            "legs=%s segments=%s geometry_points=%s",
+            duration,
+            _round_optional(distance),
+            len(legs) if isinstance(legs, list) else None,
+            len(segments),
+            len(geometry),
+        )
         return RouteCandidate(
             mode="publicTransport",
             duration_seconds=duration,
@@ -871,10 +1143,26 @@ class AgentTripPlanner:
         session = await self._repository.get_session(session_id)
         request = session.request
         agent_input = _agent_input_from_request(request)
+        logger.info(
+            "Building agent trip plan session_id=%s steps=%s locations=%s "
+            "radius_meters=%s max_stops=%s",
+            session_id,
+            len(request.steps),
+            len(agent_input.trip_locations),
+            agent_input.radius_meters,
+            agent_input.max_stops,
+        )
         agent_output = await plan_trip(
             agent_input,
             session_id=session_id,
             ask_user=self._ask_user,
+        )
+        logger.info(
+            "Agent trip plan output received session_id=%s "
+            "ordered_groups=%s warnings=%s",
+            session_id,
+            len(getattr(agent_output, "ordered_points", [])),
+            len(getattr(agent_output, "warnings", []) or []),
         )
         return _trip_plan_from_agent_output(session_id, request, agent_output)
 
@@ -921,7 +1209,10 @@ def _agent_location_center(
     step: ItineraryStepDraft, cursor: GeoCoordinate
 ) -> tuple[GeoCoordinate, float]:
     constraint = step.location
-    if constraint.type in {"exactPoint", "aroundPoint"} and constraint.point is not None:
+    if (
+        constraint.type in {"exactPoint", "aroundPoint"}
+        and constraint.point is not None
+    ):
         return constraint.point, constraint.radius_meters or 750.0
     if constraint.type == "areaCircle" and constraint.center is not None:
         return constraint.center, constraint.radius_meters or 1000.0
@@ -960,7 +1251,9 @@ def _trip_plan_from_agent_output(
 
     for group_index, raw_group in enumerate(ordered_groups):
         step = request.steps[min(group_index, len(request.steps) - 1)]
-        for point_index, raw_point in enumerate(_agent_group_points(raw_group), start=1):
+        for point_index, raw_point in enumerate(
+            _agent_group_points(raw_group), start=1
+        ):
             coordinate = _agent_point_coordinate(raw_point)
             if coordinate is None:
                 continue
@@ -1246,6 +1539,18 @@ def _distance_meters(first: GeoCoordinate, second: GeoCoordinate) -> float:
         + math.cos(first_lat) * math.cos(second_lat) * math.sin(delta_lon / 2) ** 2
     )
     return 2 * radius_meters * math.asin(math.sqrt(haversine))
+
+
+def _coord_log(coordinate: GeoCoordinate | None) -> str | None:
+    if coordinate is None:
+        return None
+    return f"{coordinate.lat:.5f},{coordinate.lon:.5f}"
+
+
+def _round_optional(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return round(value, 1)
 
 
 def _direct_walk_route(
