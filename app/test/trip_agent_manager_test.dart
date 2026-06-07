@@ -153,9 +153,9 @@ void main() {
     await Future<void>.delayed(Duration.zero);
 
     expect(agentManager.question!.id, 'q1');
-    await agentManager.answerQuestion('shop-1');
+    await agentManager.answerQuestion(['shop-1']);
     expect(api.lastAnswer!.questionId, 'q1');
-    expect(api.lastAnswer!.value, 'shop-1');
+    expect(api.lastAnswer!.value, ['shop-1']);
   });
 }
 

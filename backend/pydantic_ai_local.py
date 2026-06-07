@@ -6,6 +6,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime
 from os import getenv
 from typing import Any, Literal
 
@@ -15,6 +16,8 @@ from pydantic_ai import Agent, BinaryContent, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 from surrealdb import AsyncSurreal
+
+from trip_planning_models import GeoCoordinate, TransportMode
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +114,28 @@ AskUserCallback = Callable[
     Awaitable[Any],
 ]
 AskUserCallbackOrNone = AskUserCallback | None
+RouteBetweenCallback = Callable[
+    [
+        str,
+        GeoCoordinate,
+        GeoCoordinate,
+        list[TransportMode],
+        datetime | None,
+        datetime | None,
+        str | None,
+    ],
+    Awaitable[list[dict[str, Any]]],
+]
+RouteChainCallback = Callable[
+    [
+        str,
+        list[GeoCoordinate],
+        list[TransportMode],
+        datetime | None,
+        datetime | None,
+    ],
+    Awaitable[list[dict[str, Any]]],
+]
 
 
 @dataclass(frozen=True)
@@ -122,6 +147,8 @@ class Deps:
     db_pass: str
     session_id: str | None = None
     ask_user: AskUserCallbackOrNone = None
+    route_between: RouteBetweenCallback | None = None
+    route_chain: RouteChainCallback | None = None
 
 
 async def search_pois(
@@ -259,10 +286,98 @@ async def prompt_user(
     return json.dumps(answer, ensure_ascii=False)
 
 
+async def route_between(
+    ctx: RunContext[Deps],
+    start_lat: float,
+    start_lon: float,
+    destination_lat: float,
+    destination_lon: float,
+    modes: list[TransportMode],
+    depart_at: str | None = None,
+    arrive_by: str | None = None,
+    leg_key: str | None = None,
+    start_label: str | None = None,
+    destination_label: str | None = None,
+) -> str:
+    """Create stored route candidates between two coordinates and return summaries."""
+    if ctx.deps.session_id is None or ctx.deps.route_between is None:
+        logger.warning("Agent route_between tool called without route callback")
+        return json.dumps([], ensure_ascii=False)
+    logger.info(
+        "Agent tool route_between started session_id=%s leg_key=%s modes=%s",
+        ctx.deps.session_id,
+        leg_key,
+        modes,
+    )
+    summaries = await ctx.deps.route_between(
+        ctx.deps.session_id,
+        GeoCoordinate(lat=start_lat, lon=start_lon, label=start_label),
+        GeoCoordinate(
+            lat=destination_lat,
+            lon=destination_lon,
+            label=destination_label,
+        ),
+        modes,
+        _optional_datetime(depart_at),
+        _optional_datetime(arrive_by),
+        leg_key,
+    )
+    logger.info(
+        "Agent tool route_between completed session_id=%s leg_key=%s candidates=%s",
+        ctx.deps.session_id,
+        leg_key,
+        len(summaries),
+    )
+    return json.dumps(summaries, ensure_ascii=False)
+
+
+async def route_chain(
+    ctx: RunContext[Deps],
+    points: list[dict[str, Any]],
+    modes: list[TransportMode],
+    start_at: str | None = None,
+    end_by: str | None = None,
+) -> str:
+    """Route through an ordered list of coordinates and return selected summaries."""
+    if ctx.deps.session_id is None or ctx.deps.route_chain is None:
+        logger.warning("Agent route_chain tool called without route callback")
+        return json.dumps([], ensure_ascii=False)
+    coordinates = [
+        GeoCoordinate(
+            lat=float(point["lat"]),
+            lon=float(point["lon"]),
+            label=point.get("label") if isinstance(point.get("label"), str) else None,
+        )
+        for point in points
+        if isinstance(point, dict) and "lat" in point and "lon" in point
+    ]
+    logger.info(
+        "Agent tool route_chain started session_id=%s points=%s modes=%s",
+        ctx.deps.session_id,
+        len(coordinates),
+        modes,
+    )
+    summaries = await ctx.deps.route_chain(
+        ctx.deps.session_id,
+        coordinates,
+        modes,
+        _optional_datetime(start_at),
+        _optional_datetime(end_by),
+    )
+    logger.info(
+        "Agent tool route_chain completed session_id=%s legs=%s",
+        ctx.deps.session_id,
+        len(summaries),
+    )
+    return json.dumps(summaries, ensure_ascii=False)
+
+
 async def plan_trip(
     inp: TripPlanInput,
     session_id: str | None = None,
     ask_user: AskUserCallbackOrNone = None,
+    route_between: RouteBetweenCallback | None = None,
+    route_chain: RouteChainCallback | None = None,
 ) -> TripPlanOutput:
     agent = _build_agent()
     prompt = _planning_prompt(inp)
@@ -284,6 +399,8 @@ async def plan_trip(
             db_pass=getenv("SURREALDB_PASSWORD", "root"),
             session_id=session_id,
             ask_user=ask_user,
+            route_between=route_between,
+            route_chain=route_chain,
         ),
         # model_settings={"temperature": 0.2},
     )
@@ -324,8 +441,11 @@ def _build_agent() -> Agent[Any, Any]:
     agent.tool_plain(search_pois)
     # agent.tool_plain(search_closest_city)
     agent.tool(prompt_user, sequential=True)
+    agent.tool(route_between, sequential=True)
+    agent.tool(route_chain, sequential=True)
     logger.debug(
-        "Trip-planning agent tools registered tools=%s", ["search_pois", "prompt_user"]
+        "Trip-planning agent tools registered tools=%s",
+        ["search_pois", "prompt_user", "route_between", "route_chain"],
     )
     return agent
 
@@ -392,6 +512,11 @@ User prompts can be of the following types:
 - ('text', message (e.g., "Please describe your preferences:")) -> string.
 - ('selection', message (e.g., "Please select an option:")) -> option id string, or an object if the backend explicitly defines a richer option payload.
 - ('routeChoice', message (e.g., "Please choose a route:")) -> selected route/option id string, or a route-choice object if specified in the question payload.
+
+Routing tools:
+- Use route_between to ask the backend to calculate route candidates between two coordinates. It returns compact summaries with routeCandidateId, mode, durationSeconds, distanceMeters, transferCount, and summary.
+- Use route_chain to route an ordered chain of coordinates. The backend stores candidate details and may ask the user to choose between alternatives.
+- Do not invent travel times or distances. Use routing tool summaries when comparing routes.
 
 """
     first_location = next(iter(inp.trip_locations), None)
@@ -461,6 +586,12 @@ def _closest_city_query(lat: float, lon: float) -> tuple[str, dict[str, Any]]:
             "lon": lon,
         },
     )
+
+
+def _optional_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value)
 
 
 def _jsonable(value: Any) -> Any:

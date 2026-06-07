@@ -8,12 +8,13 @@ import math
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from os import getenv
 from typing import Any, Protocol
 from uuid import uuid4
 
 import httpx
-from surrealdb import RecordID, SurrealError
+from surrealdb import Datetime, RecordID, SurrealError
 
 from motis import MotisPlanRequest
 from trip_planning_models import (
@@ -42,6 +43,7 @@ from valhalla import (
 
 SESSION_TABLE = "trip_planning_session"
 EVENT_TABLE = "trip_planning_event"
+ROUTE_CANDIDATE_TABLE = "trip_planning_route_candidate"
 NEARBY_DIRECT_WALK_METERS = 15.0
 
 logger = logging.getLogger(__name__)
@@ -90,12 +92,23 @@ class StoredPlanningEvent:
 
 @dataclass(frozen=True)
 class RouteCandidate:
+    id: str
+    session_id: str
+    leg_key: str
+    start: GeoCoordinate
+    destination: GeoCoordinate
     mode: TransportMode
     duration_seconds: int
     distance_meters: float | None
     geometry: list[GeoCoordinate]
     description: str
     segments: list[TripRouteSegment]
+    provider: str
+    depart_at: datetime | None = None
+    arrive_by: datetime | None = None
+    raw_provider_payload: dict[str, Any] | None = None
+    selected_at: datetime | None = None
+    created_at: datetime | None = None
 
 
 class TripPlanningRepository(Protocol):
@@ -124,6 +137,22 @@ class TripPlanningRepository(Protocol):
         category_filter: PoiCategoryFilter | None,
         limit: int = 5,
     ) -> list[PoiCandidate]: ...
+
+    async def create_route_candidate(
+        self, candidate: RouteCandidate
+    ) -> RouteCandidate: ...
+
+    async def list_route_candidates(
+        self, session_id: str, leg_key: str | None = None
+    ) -> list[RouteCandidate]: ...
+
+    async def get_route_candidate(
+        self, session_id: str, candidate_id: str
+    ) -> RouteCandidate: ...
+
+    async def mark_route_candidate_selected(
+        self, session_id: str, candidate_id: str, selected_at: datetime
+    ) -> RouteCandidate: ...
 
 
 class ValhallaRoutingClient(Protocol):
@@ -320,6 +349,68 @@ class SurrealTripPlanningRepository:
         )
         return candidates
 
+    async def create_route_candidate(
+        self, candidate: RouteCandidate
+    ) -> RouteCandidate:
+        record = _route_candidate_record(candidate)
+        await self._db.create(_route_candidate_record_id(candidate.id), record)
+        logger.info(
+            "Stored route candidate session_id=%s leg_key=%s candidate_id=%s "
+            "mode=%s duration_seconds=%s",
+            candidate.session_id,
+            candidate.leg_key,
+            candidate.id,
+            candidate.mode,
+            candidate.duration_seconds,
+        )
+        return _route_candidate_from_record({**record, "id": candidate.id})
+
+    async def list_route_candidates(
+        self, session_id: str, leg_key: str | None = None
+    ) -> list[RouteCandidate]:
+        leg_clause = "AND legKey = $leg_key" if leg_key is not None else ""
+        variables: dict[str, Any] = {"session_id": session_id}
+        if leg_key is not None:
+            variables["leg_key"] = leg_key
+        records = await self._db.query(
+            f"""
+            SELECT *
+            FROM trip_planning_route_candidate
+            WHERE sessionId = $session_id {leg_clause}
+            ORDER BY createdAt ASC;
+            """,
+            variables,
+        )
+        if not isinstance(records, list):
+            return []
+        return [_route_candidate_from_record(record) for record in records]
+
+    async def get_route_candidate(
+        self, session_id: str, candidate_id: str
+    ) -> RouteCandidate:
+        record = await self._select_one(_route_candidate_record_id(candidate_id))
+        if record is None or record.get("sessionId") != session_id:
+            raise RoutePlanningError(f"Route candidate {candidate_id} was not found.")
+        return _route_candidate_from_record({**record, "id": candidate_id})
+
+    async def mark_route_candidate_selected(
+        self, session_id: str, candidate_id: str, selected_at: datetime
+    ) -> RouteCandidate:
+        existing = await self.get_route_candidate(session_id, candidate_id)
+        record = await self._db.merge(
+            _route_candidate_record_id(candidate_id),
+            {"selectedAt": _surreal_datetime(selected_at)},
+        )
+        if record is None:
+            raise RoutePlanningError(f"Route candidate {candidate_id} was not found.")
+        logger.info(
+            "Marked route candidate selected session_id=%s leg_key=%s candidate_id=%s",
+            session_id,
+            existing.leg_key,
+            candidate_id,
+        )
+        return _route_candidate_from_record({**record, "id": candidate_id})
+
     async def _select_one(self, record_id: RecordID) -> dict[str, Any] | None:
         result = await self._db.select(record_id)
         if isinstance(result, list):
@@ -386,12 +477,22 @@ class TripPlanningService:
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._pending_answers: dict[str, tuple[str, asyncio.Future[Any]]] = {}
         self._question_locks: dict[str, asyncio.Lock] = {}
+        route_candidates = TripRouteCandidateService(
+            repository,
+            valhalla,
+            motis,
+            self.ask_user,
+        )
         if planner is not None:
             self._planner = planner
         elif _use_agent_planner(use_agent):
-            self._planner = AgentTripPlanner(repository, self.ask_user)
+            self._planner = AgentTripPlanner(
+                repository,
+                self.ask_user,
+                route_candidates,
+            )
         else:
-            self._planner = TripPlanner(repository, valhalla, motis)
+            self._planner = TripPlanner(repository, route_candidates)
         logger.info(
             "Trip-planning service initialized planner=%s",
             type(self._planner).__name__,
@@ -735,16 +836,332 @@ class TripPlanningService:
             raise asyncio.CancelledError
 
 
-class TripPlanner:
+class TripRouteCandidateService:
     def __init__(
         self,
         repository: TripPlanningRepository,
         valhalla: ValhallaRoutingClient,
         motis: MotisRoutingClient,
+        ask_user: Any,
     ) -> None:
         self._repository = repository
         self._valhalla = valhalla
         self._motis = motis
+        self._ask_user = ask_user
+
+    async def route_between(
+        self,
+        session_id: str,
+        leg_key: str,
+        start: GeoCoordinate,
+        destination: GeoCoordinate,
+        modes: list[TransportMode],
+        depart_at: datetime | None = None,
+        arrive_by: datetime | None = None,
+    ) -> list[RouteCandidate]:
+        depart_at = depart_at or _utc_now()
+        distance_meters = _distance_meters(start, destination)
+        if distance_meters <= NEARBY_DIRECT_WALK_METERS:
+            logger.info(
+                "Using direct nearby walk route session_id=%s leg_key=%s "
+                "from=%s to=%s distance_meters=%.1f",
+                session_id,
+                leg_key,
+                _coord_log(start),
+                _coord_log(destination),
+                distance_meters,
+            )
+            candidate = _direct_walk_route(
+                start,
+                destination,
+                distance_meters,
+                session_id=session_id,
+                leg_key=leg_key,
+                depart_at=depart_at,
+                arrive_by=arrive_by,
+            )
+            return [await self._repository.create_route_candidate(candidate)]
+
+        candidates: list[RouteCandidate] = []
+        for mode in modes:
+            try:
+                logger.info(
+                    "Requesting route candidate session_id=%s leg_key=%s mode=%s "
+                    "from=%s to=%s depart_at=%s arrive_by=%s",
+                    session_id,
+                    leg_key,
+                    mode,
+                    _coord_log(start),
+                    _coord_log(destination),
+                    depart_at.isoformat() if depart_at is not None else None,
+                    arrive_by.isoformat() if arrive_by is not None else None,
+                )
+                if mode == "publicTransport":
+                    candidate = await self._route_with_motis(
+                        session_id,
+                        leg_key,
+                        start,
+                        destination,
+                        depart_at,
+                        arrive_by,
+                    )
+                else:
+                    candidate = await self._route_with_valhalla(
+                        session_id,
+                        leg_key,
+                        start,
+                        destination,
+                        mode,
+                        depart_at,
+                        arrive_by,
+                    )
+                candidates.append(
+                    await self._repository.create_route_candidate(candidate)
+                )
+            except (
+                RoutePlanningError,
+                httpx.HTTPError,
+                KeyError,
+                ValueError,
+                TypeError,
+            ) as exc:
+                logger.warning(
+                    "Route candidate failed session_id=%s leg_key=%s mode=%s "
+                    "from=%s to=%s error=%s",
+                    session_id,
+                    leg_key,
+                    mode,
+                    _coord_log(start),
+                    _coord_log(destination),
+                    exc,
+                )
+                continue
+
+        if not candidates:
+            raise RoutePlanningError(
+                "No reachable route was found for a required trip leg."
+            )
+        return candidates
+
+    async def select_route(
+        self,
+        session_id: str,
+        leg_key: str,
+        start: GeoCoordinate,
+        destination: GeoCoordinate,
+        modes: list[TransportMode],
+        depart_at: datetime,
+        title: str,
+        arrive_by: datetime | None = None,
+    ) -> RouteCandidate:
+        candidates = await self.route_between(
+            session_id=session_id,
+            leg_key=leg_key,
+            start=start,
+            destination=destination,
+            modes=modes,
+            depart_at=depart_at,
+            arrive_by=arrive_by,
+        )
+        if len(candidates) == 1:
+            return await self._repository.mark_route_candidate_selected(
+                session_id,
+                candidates[0].id,
+                _utc_now(),
+            )
+
+        options = [_route_choice_option(candidate) for candidate in candidates]
+        answer = await self._ask_user(
+            session_id,
+            "routeChoice",
+            f"Choose a route for {title}.",
+            options,
+        )
+        candidate_id = _route_candidate_id_from_answer(answer)
+        if candidate_id not in {candidate.id for candidate in candidates}:
+            raise InvalidAnswerError("routeChoice answer must reference a candidate")
+        return await self._repository.mark_route_candidate_selected(
+            session_id,
+            candidate_id,
+            _utc_now(),
+        )
+
+    async def route_chain(
+        self,
+        session_id: str,
+        points: list[GeoCoordinate],
+        modes: list[TransportMode],
+        start_at: datetime | None = None,
+        end_by: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        if len(points) < 2:
+            return []
+        current_time = start_at or _utc_now()
+        summaries: list[dict[str, Any]] = []
+        for index, (start, destination) in enumerate(pairwise(points), start=1):
+            selected = await self.select_route(
+                session_id=session_id,
+                leg_key=f"chain-{index}",
+                start=start,
+                destination=destination,
+                modes=modes,
+                depart_at=current_time,
+                arrive_by=end_by if index == len(points) - 1 else None,
+                title=f"leg {index}",
+            )
+            summaries.append(_route_candidate_summary(selected))
+            current_time += timedelta(seconds=selected.duration_seconds)
+        return summaries
+
+    async def get_candidate(
+        self, session_id: str, candidate_id: str
+    ) -> RouteCandidate:
+        return await self._repository.get_route_candidate(session_id, candidate_id)
+
+    async def _route_with_valhalla(
+        self,
+        session_id: str,
+        leg_key: str,
+        start: GeoCoordinate,
+        destination: GeoCoordinate,
+        mode: TransportMode,
+        depart_at: datetime | None,
+        arrive_by: datetime | None,
+    ) -> RouteCandidate:
+        costing = _valhalla_costing(mode)
+        response = await self._valhalla.route(
+            ValhallaRouteRequest(
+                locations=[
+                    ValhallaLocation(
+                        lat=start.lat,
+                        lon=start.lon,
+                        name=start.label,
+                    ),
+                    ValhallaLocation(
+                        lat=destination.lat,
+                        lon=destination.lon,
+                        name=destination.label,
+                    ),
+                ],
+                costing=costing,
+                shape_format="geojson",
+                directions_type="none",
+                alternates=0,
+            )
+        )
+        trip = _dict_value(response.get("trip"))
+        if trip is None:
+            raise RoutePlanningError("Valhalla response did not contain a trip")
+        summary = _dict_value(trip.get("summary")) or {}
+        duration = _int_value(summary.get("time")) or 0
+        length_km = _float_value(summary.get("length"))
+        geometry = [
+            *_coordinates_from_any(trip.get("shape")),
+            *_coordinates_from_valhalla_legs(trip.get("legs")),
+        ]
+        description = _route_description(mode, duration, length_km)
+        return RouteCandidate(
+            id=uuid4().hex,
+            session_id=session_id,
+            leg_key=leg_key,
+            start=start,
+            destination=destination,
+            mode=mode,
+            duration_seconds=duration,
+            distance_meters=None if length_km is None else length_km * 1000,
+            geometry=geometry,
+            description=description,
+            segments=[
+                TripRouteSegment(
+                    transport_mode=mode,
+                    geometry=geometry,
+                    description=description,
+                )
+            ],
+            provider="valhalla",
+            depart_at=depart_at,
+            arrive_by=arrive_by,
+            raw_provider_payload=response,
+            created_at=_utc_now(),
+        )
+
+    async def _route_with_motis(
+        self,
+        session_id: str,
+        leg_key: str,
+        start: GeoCoordinate,
+        destination: GeoCoordinate,
+        depart_at: datetime,
+        arrive_by: datetime | None,
+    ) -> RouteCandidate:
+        response = await self._motis.plan(
+            MotisPlanRequest(
+                fromPlace=_motis_place(start),
+                toPlace=_motis_place(destination),
+                time=arrive_by or depart_at,
+                arriveBy=arrive_by is not None,
+                detailedLegs=True,
+                detailedTransfers=True,
+                joinInterlinedLegs=False,
+                directModes=[],
+                preTransitModes=["WALK"],
+                postTransitModes=["WALK"],
+                transitModes=["TRANSIT"],
+                numItineraries=1,
+                numLegAlternatives=0,
+                timetableView=False,
+                language=["de", "en"],
+            )
+        )
+        itineraries = response.get("itineraries")
+        if not isinstance(itineraries, list) or not itineraries:
+            raise RoutePlanningError("MOTIS response did not contain itineraries")
+        itinerary = _dict_value(itineraries[0])
+        if itinerary is None:
+            raise RoutePlanningError("MOTIS itinerary was not an object")
+        legs = itinerary.get("legs")
+        duration = _int_value(itinerary.get("duration"))
+        if duration is None:
+            duration = _motis_legs_duration(legs)
+        distance = _motis_legs_distance(legs)
+        geometry = _coordinates_from_motis_legs(legs)
+        segments = _segments_from_motis_legs(legs)
+        description = _motis_description(legs, duration)
+        return RouteCandidate(
+            id=uuid4().hex,
+            session_id=session_id,
+            leg_key=leg_key,
+            start=start,
+            destination=destination,
+            mode="publicTransport",
+            duration_seconds=duration,
+            distance_meters=distance,
+            geometry=geometry,
+            description=description,
+            segments=segments
+            or [
+                TripRouteSegment(
+                    transport_mode="publicTransport",
+                    geometry=geometry,
+                    description=description,
+                )
+            ],
+            provider="motis",
+            depart_at=depart_at,
+            arrive_by=arrive_by,
+            raw_provider_payload=response,
+            created_at=_utc_now(),
+        )
+
+
+class TripPlanner:
+    def __init__(
+        self,
+        repository: TripPlanningRepository,
+        route_candidates: TripRouteCandidateService,
+    ) -> None:
+        self._repository = repository
+        self._route_candidates = route_candidates
 
     async def build_plan(self, session_id: str) -> TripPlan:
         session = await self._repository.get_session(session_id)
@@ -779,11 +1196,14 @@ class TripPlanner:
                 activity_location.label,
             )
             if not _same_place(cursor, activity_location):
-                route = await self._route_between(
-                    cursor,
-                    activity_location,
-                    request.transport_modes,
-                    current_time,
+                route = await self._route_candidates.select_route(
+                    session_id=session_id,
+                    leg_key=f"step-{index}",
+                    start=cursor,
+                    destination=activity_location,
+                    modes=request.transport_modes,
+                    depart_at=current_time,
+                    title=f"Travel to {step.title}",
                 )
                 logger.info(
                     "Selected route for step session_id=%s step_index=%s "
@@ -844,11 +1264,14 @@ class TripPlanner:
                 _coord_log(cursor),
                 _coord_log(request.end_location),
             )
-            route = await self._route_between(
-                cursor,
-                request.end_location,
-                request.transport_modes,
-                current_time,
+            route = await self._route_candidates.select_route(
+                session_id=session_id,
+                leg_key="final",
+                start=cursor,
+                destination=request.end_location,
+                modes=request.transport_modes,
+                depart_at=current_time,
+                title="Travel to final destination",
             )
             logger.info(
                 "Selected final route session_id=%s mode=%s "
@@ -928,214 +1351,16 @@ class TripPlanner:
         )
         return _with_default_label(center, step.title)
 
-    async def _route_between(
-        self,
-        start: GeoCoordinate,
-        destination: GeoCoordinate,
-        modes: list[TransportMode],
-        depart_at: datetime,
-    ) -> RouteCandidate:
-        distance_meters = _distance_meters(start, destination)
-        if distance_meters <= NEARBY_DIRECT_WALK_METERS:
-            logger.info(
-                "Using direct nearby walk route from=%s to=%s distance_meters=%.1f",
-                _coord_log(start),
-                _coord_log(destination),
-                distance_meters,
-            )
-            return _direct_walk_route(start, destination, distance_meters)
-
-        candidates: list[RouteCandidate] = []
-        for mode in modes:
-            try:
-                logger.info(
-                    "Requesting route candidate mode=%s from=%s to=%s depart_at=%s",
-                    mode,
-                    _coord_log(start),
-                    _coord_log(destination),
-                    depart_at.isoformat(),
-                )
-                if mode == "publicTransport":
-                    candidates.append(
-                        await self._route_with_motis(start, destination, depart_at)
-                    )
-                else:
-                    candidates.append(
-                        await self._route_with_valhalla(start, destination, mode)
-                    )
-            except (
-                RoutePlanningError,
-                httpx.HTTPError,
-                KeyError,
-                ValueError,
-                TypeError,
-            ) as exc:
-                logger.warning(
-                    "Route candidate failed mode=%s from=%s to=%s error=%s",
-                    mode,
-                    _coord_log(start),
-                    _coord_log(destination),
-                    exc,
-                )
-                continue
-
-        if not candidates:
-            raise RoutePlanningError(
-                "No reachable route was found for a required trip leg."
-            )
-        selected = min(candidates, key=lambda candidate: candidate.duration_seconds)
-        logger.info(
-            "Route candidate selected mode=%s duration_seconds=%s alternatives=%s",
-            selected.mode,
-            selected.duration_seconds,
-            len(candidates),
-        )
-        return selected
-
-    async def _route_with_valhalla(
-        self,
-        start: GeoCoordinate,
-        destination: GeoCoordinate,
-        mode: TransportMode,
-    ) -> RouteCandidate:
-        costing = _valhalla_costing(mode)
-        logger.debug(
-            "Calling Valhalla route mode=%s costing=%s from=%s to=%s",
-            mode,
-            costing,
-            _coord_log(start),
-            _coord_log(destination),
-        )
-        response = await self._valhalla.route(
-            ValhallaRouteRequest(
-                locations=[
-                    ValhallaLocation(
-                        lat=start.lat,
-                        lon=start.lon,
-                        name=start.label,
-                    ),
-                    ValhallaLocation(
-                        lat=destination.lat,
-                        lon=destination.lon,
-                        name=destination.label,
-                    ),
-                ],
-                costing=costing,
-                shape_format="geojson",
-                directions_type="none",
-                alternates=0,
-            )
-        )
-        trip = _dict_value(response.get("trip"))
-        if trip is None:
-            raise RoutePlanningError("Valhalla response did not contain a trip")
-        summary = _dict_value(trip.get("summary")) or {}
-        duration = _int_value(summary.get("time")) or 0
-        length_km = _float_value(summary.get("length"))
-        geometry = [
-            *_coordinates_from_any(trip.get("shape")),
-            *_coordinates_from_valhalla_legs(trip.get("legs")),
-        ]
-        logger.info(
-            "Valhalla route response mode=%s duration_seconds=%s "
-            "length_km=%s geometry_points=%s",
-            mode,
-            duration,
-            length_km,
-            len(geometry),
-        )
-        return RouteCandidate(
-            mode=mode,
-            duration_seconds=duration,
-            distance_meters=None if length_km is None else length_km * 1000,
-            geometry=geometry,
-            description=_route_description(mode, duration, length_km),
-            segments=[
-                TripRouteSegment(
-                    transport_mode=mode,
-                    geometry=geometry,
-                    description=_route_description(mode, duration, length_km),
-                )
-            ],
-        )
-
-    async def _route_with_motis(
-        self,
-        start: GeoCoordinate,
-        destination: GeoCoordinate,
-        depart_at: datetime,
-    ) -> RouteCandidate:
-        logger.debug(
-            "Calling MOTIS plan from=%s to=%s depart_at=%s",
-            _coord_log(start),
-            _coord_log(destination),
-            depart_at.isoformat(),
-        )
-        response = await self._motis.plan(
-            MotisPlanRequest(
-                fromPlace=_motis_place(start),
-                toPlace=_motis_place(destination),
-                time=depart_at,
-                detailedLegs=True,
-                detailedTransfers=True,
-                joinInterlinedLegs=False,
-                directModes=[],
-                preTransitModes=["WALK"],
-                postTransitModes=["WALK"],
-                transitModes=["TRANSIT"],
-                numItineraries=1,
-                numLegAlternatives=0,
-                timetableView=False,
-                language=["de", "en"],
-            )
-        )
-        itineraries = response.get("itineraries")
-        if not isinstance(itineraries, list) or not itineraries:
-            raise RoutePlanningError("MOTIS response did not contain itineraries")
-        itinerary = _dict_value(itineraries[0])
-        if itinerary is None:
-            raise RoutePlanningError("MOTIS itinerary was not an object")
-        legs = itinerary.get("legs")
-        duration = _int_value(itinerary.get("duration"))
-        if duration is None:
-            duration = _motis_legs_duration(legs)
-        distance = _motis_legs_distance(legs)
-        geometry = _coordinates_from_motis_legs(legs)
-        segments = _segments_from_motis_legs(legs)
-        logger.info(
-            "MOTIS route response duration_seconds=%s distance_meters=%s "
-            "legs=%s segments=%s geometry_points=%s",
-            duration,
-            _round_optional(distance),
-            len(legs) if isinstance(legs, list) else None,
-            len(segments),
-            len(geometry),
-        )
-        return RouteCandidate(
-            mode="publicTransport",
-            duration_seconds=duration,
-            distance_meters=distance,
-            geometry=geometry,
-            description=_motis_description(legs, duration),
-            segments=segments
-            or [
-                TripRouteSegment(
-                    transport_mode="publicTransport",
-                    geometry=geometry,
-                    description=_motis_description(legs, duration),
-                )
-            ],
-        )
-
-
 class AgentTripPlanner:
     def __init__(
         self,
         repository: TripPlanningRepository,
         ask_user: Any,
+        route_candidates: TripRouteCandidateService,
     ) -> None:
         self._repository = repository
         self._ask_user = ask_user
+        self._route_candidates = route_candidates
 
     async def build_plan(self, session_id: str) -> TripPlan:
         from pydantic_ai_local import plan_trip
@@ -1156,6 +1381,8 @@ class AgentTripPlanner:
             agent_input,
             session_id=session_id,
             ask_user=self._ask_user,
+            route_between=self._agent_route_between,
+            route_chain=self._agent_route_chain,
         )
         logger.info(
             "Agent trip plan output received session_id=%s "
@@ -1164,7 +1391,49 @@ class AgentTripPlanner:
             len(getattr(agent_output, "ordered_points", [])),
             len(getattr(agent_output, "warnings", []) or []),
         )
-        return _trip_plan_from_agent_output(session_id, request, agent_output)
+        return await _trip_plan_from_agent_output(
+            session_id,
+            request,
+            agent_output,
+            self._route_candidates,
+        )
+
+    async def _agent_route_between(
+        self,
+        session_id: str,
+        start: GeoCoordinate,
+        destination: GeoCoordinate,
+        modes: list[TransportMode],
+        depart_at: datetime | None = None,
+        arrive_by: datetime | None = None,
+        leg_key: str | None = None,
+    ) -> list[dict[str, Any]]:
+        candidates = await self._route_candidates.route_between(
+            session_id=session_id,
+            leg_key=leg_key or uuid4().hex,
+            start=start,
+            destination=destination,
+            modes=modes,
+            depart_at=depart_at,
+            arrive_by=arrive_by,
+        )
+        return [_route_candidate_summary(candidate) for candidate in candidates]
+
+    async def _agent_route_chain(
+        self,
+        session_id: str,
+        points: list[GeoCoordinate],
+        modes: list[TransportMode],
+        start_at: datetime | None = None,
+        end_by: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        return await self._route_candidates.route_chain(
+            session_id=session_id,
+            points=points,
+            modes=modes,
+            start_at=start_at,
+            end_by=end_by,
+        )
 
 
 def _use_agent_planner(use_agent: bool | None) -> bool:
@@ -1240,12 +1509,14 @@ def _agent_category(step_type: ItineraryStepType) -> str:
     return "other"
 
 
-def _trip_plan_from_agent_output(
+async def _trip_plan_from_agent_output(
     session_id: str,
     request: TripPlanningRequest,
     agent_output: Any,
+    route_candidates: TripRouteCandidateService,
 ) -> TripPlan:
     current_time = _initial_time(request)
+    cursor = request.start_location
     items: list[TripPlanItem] = []
     ordered_groups = getattr(agent_output, "ordered_points", [])
 
@@ -1259,6 +1530,35 @@ def _trip_plan_from_agent_output(
                 continue
 
             title = _agent_point_title(raw_point) or step.title
+            activity_location = _with_default_label(coordinate, title)
+            if not _same_place(cursor, activity_location):
+                route = await route_candidates.select_route(
+                    session_id=session_id,
+                    leg_key=f"agent-{group_index + 1}-{point_index}",
+                    start=cursor,
+                    destination=activity_location,
+                    modes=request.transport_modes,
+                    depart_at=current_time,
+                    title=f"Travel to {title}",
+                )
+                travel_start = current_time
+                travel_end = current_time + timedelta(seconds=route.duration_seconds)
+                items.append(
+                    TripPlanItem(
+                        id=f"travel-{group_index + 1}-{point_index}",
+                        type="travel",
+                        title=f"Travel to {title}",
+                        description=route.description,
+                        reasoning="Selected from stored route candidates.",
+                        transport_mode=route.mode,
+                        start_time=travel_start,
+                        end_time=travel_end,
+                        geometry=route.geometry,
+                        segments=route.segments,
+                    )
+                )
+                current_time = travel_end
+
             activity_start = _activity_start_time(step, current_time)
             activity_end = activity_start + timedelta(
                 minutes=step.time.duration_minutes
@@ -1274,14 +1574,43 @@ def _trip_plan_from_agent_output(
                     step_type=step.type,
                     start_time=activity_start,
                     end_time=activity_end,
-                    location=_with_default_label(coordinate, title),
+                    location=activity_location,
                     visual_target=LocationConstraint(
                         type="exactPoint",
-                        point=_with_default_label(coordinate, title),
+                        point=activity_location,
                     ),
                 )
             )
+            cursor = activity_location
             current_time = activity_end
+
+    if request.end_location is not None and not _same_place(
+        cursor,
+        request.end_location,
+    ):
+        route = await route_candidates.select_route(
+            session_id=session_id,
+            leg_key="agent-final",
+            start=cursor,
+            destination=request.end_location,
+            modes=request.transport_modes,
+            depart_at=current_time,
+            title="Travel to final destination",
+        )
+        items.append(
+            TripPlanItem(
+                id="travel-final",
+                type="travel",
+                title="Travel to final destination",
+                description=route.description,
+                reasoning="Connects the itinerary to the requested end point.",
+                transport_mode=route.mode,
+                start_time=current_time,
+                end_time=current_time + timedelta(seconds=route.duration_seconds),
+                geometry=route.geometry,
+                segments=route.segments,
+            )
+        )
 
     return TripPlan(
         id=f"plan-{session_id}",
@@ -1434,6 +1763,147 @@ def _event_record_id(session_id: str, sequence: int) -> RecordID:
     return RecordID(EVENT_TABLE, f"{session_id}_{sequence:08d}")
 
 
+def _route_candidate_record_id(candidate_id: str) -> RecordID:
+    return RecordID(ROUTE_CANDIDATE_TABLE, candidate_id)
+
+
+def _route_candidate_record(candidate: RouteCandidate) -> dict[str, Any]:
+    return {
+        "sessionId": candidate.session_id,
+        "legKey": candidate.leg_key,
+        "from": _json_model(candidate.start),
+        "to": _json_model(candidate.destination),
+        "departAt": _surreal_datetime_or_none(candidate.depart_at),
+        "arriveBy": _surreal_datetime_or_none(candidate.arrive_by),
+        "mode": candidate.mode,
+        "durationSeconds": candidate.duration_seconds,
+        "distanceMeters": candidate.distance_meters,
+        "geometry": [_json_model(coordinate) for coordinate in candidate.geometry],
+        "segments": [_json_model(segment) for segment in candidate.segments],
+        "summary": candidate.description,
+        "provider": candidate.provider,
+        "rawProviderPayload": candidate.raw_provider_payload,
+        "selectedAt": _surreal_datetime_or_none(candidate.selected_at),
+        "createdAt": _surreal_datetime(candidate.created_at or _utc_now()),
+    }
+
+
+def _route_candidate_from_record(record: Any) -> RouteCandidate:
+    if not isinstance(record, dict):
+        raise ValueError("Expected route candidate record")
+    raw_id = record.get("id")
+    candidate_id = str(raw_id.id) if isinstance(raw_id, RecordID) else str(raw_id)
+    return RouteCandidate(
+        id=candidate_id,
+        session_id=str(record.get("sessionId")),
+        leg_key=str(record.get("legKey")),
+        start=GeoCoordinate.model_validate(record.get("from")),
+        destination=GeoCoordinate.model_validate(record.get("to")),
+        mode=record.get("mode"),
+        duration_seconds=_int_value(record.get("durationSeconds")) or 0,
+        distance_meters=_float_value(record.get("distanceMeters")),
+        geometry=[
+            GeoCoordinate.model_validate(coordinate)
+            for coordinate in record.get("geometry", [])
+        ],
+        description=_str_value(record.get("summary")) or "",
+        segments=[
+            TripRouteSegment.model_validate(segment)
+            for segment in record.get("segments", [])
+        ],
+        provider=_str_value(record.get("provider")) or "unknown",
+        depart_at=_datetime_value_or_none(record.get("departAt")),
+        arrive_by=_datetime_value_or_none(record.get("arriveBy")),
+        raw_provider_payload=_dict_value(record.get("rawProviderPayload")),
+        selected_at=_datetime_value_or_none(record.get("selectedAt")),
+        created_at=_datetime_value_or_none(record.get("createdAt")),
+    )
+
+
+def _route_choice_option(candidate: RouteCandidate) -> dict[str, Any]:
+    summary = _route_candidate_summary(candidate)
+    return {
+        "id": candidate.id,
+        "title": summary["title"],
+        "description": summary["description"],
+        "routeCandidateId": candidate.id,
+        "mode": candidate.mode,
+        "durationSeconds": candidate.duration_seconds,
+        "distanceMeters": candidate.distance_meters,
+        "transferCount": summary["transferCount"],
+        "departAt": candidate.depart_at.isoformat()
+        if candidate.depart_at is not None
+        else None,
+        "arriveBy": candidate.arrive_by.isoformat()
+        if candidate.arrive_by is not None
+        else None,
+        "summary": candidate.description,
+    }
+
+
+def _route_candidate_summary(candidate: RouteCandidate) -> dict[str, Any]:
+    transfer_count = _route_transfer_count(candidate)
+    distance = (
+        ""
+        if candidate.distance_meters is None
+        else f", {_distance_label(candidate.distance_meters)}"
+    )
+    transfers = (
+        ""
+        if transfer_count == 0
+        else f", {transfer_count} transfer{'s' if transfer_count != 1 else ''}"
+    )
+    return {
+        "routeCandidateId": candidate.id,
+        "title": _transport_mode_label(candidate.mode),
+        "description": (
+            f"{_minutes(candidate.duration_seconds)} min{distance}{transfers}. "
+            f"{candidate.description}"
+        ),
+        "mode": candidate.mode,
+        "durationSeconds": candidate.duration_seconds,
+        "distanceMeters": candidate.distance_meters,
+        "transferCount": transfer_count,
+        "departAt": candidate.depart_at.isoformat()
+        if candidate.depart_at is not None
+        else None,
+        "arriveBy": candidate.arrive_by.isoformat()
+        if candidate.arrive_by is not None
+        else None,
+        "summary": candidate.description,
+    }
+
+
+def _route_transfer_count(candidate: RouteCandidate) -> int:
+    transit_segments = [
+        segment
+        for segment in candidate.segments
+        if segment.transport_mode == "publicTransport"
+    ]
+    return max(0, len(transit_segments) - 1)
+
+
+def _route_candidate_id_from_answer(answer: Any) -> str:
+    if isinstance(answer, str):
+        return answer
+    if isinstance(answer, dict):
+        value = answer.get("routeCandidateId") or answer.get("id")
+        if isinstance(value, str):
+            return value
+    raise InvalidAnswerError("routeChoice answer must reference a route candidate")
+
+
+def _surreal_datetime(value: datetime) -> Datetime:
+    value = _ensure_aware(value).astimezone(UTC)
+    return Datetime(value.isoformat().replace("+00:00", "Z"))
+
+
+def _surreal_datetime_or_none(value: datetime | None) -> Datetime | None:
+    if value is None:
+        return None
+    return _surreal_datetime(value)
+
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -1554,7 +2024,13 @@ def _round_optional(value: float | None) -> float | None:
 
 
 def _direct_walk_route(
-    start: GeoCoordinate, destination: GeoCoordinate, distance_meters: float
+    start: GeoCoordinate,
+    destination: GeoCoordinate,
+    distance_meters: float,
+    session_id: str = "",
+    leg_key: str = "",
+    depart_at: datetime | None = None,
+    arrive_by: datetime | None = None,
 ) -> RouteCandidate:
     duration_seconds = max(30, round(distance_meters / 1.4))
     geometry = [
@@ -1565,6 +2041,11 @@ def _direct_walk_route(
     ]
     description = _walk_description(distance_meters, duration_seconds)
     return RouteCandidate(
+        id=uuid4().hex,
+        session_id=session_id,
+        leg_key=leg_key,
+        start=start,
+        destination=destination,
         mode="walk",
         duration_seconds=duration_seconds,
         distance_meters=distance_meters,
@@ -1577,6 +2058,10 @@ def _direct_walk_route(
                 description=description,
             )
         ],
+        provider="direct",
+        depart_at=depart_at,
+        arrive_by=arrive_by,
+        created_at=_utc_now(),
     )
 
 

@@ -11,12 +11,15 @@ from trip_planning import (
     AgentTripPlanner,
     InvalidAnswerError,
     PoiCandidate,
+    RouteCandidate,
     RoutePlanningError,
     SessionNotFoundError,
     StaleAnswerError,
     StoredPlanningEvent,
     TripPlanner,
     TripPlanningService,
+    TripRouteCandidateService,
+    _route_candidate_record,
 )
 from trip_planning_models import (
     GeoCoordinate,
@@ -26,6 +29,7 @@ from trip_planning_models import (
     TripPlanningEventPayload,
     TripPlanningRequest,
     TripPlanningSessionSnapshot,
+    TripRouteSegment,
 )
 
 
@@ -241,6 +245,107 @@ async def test_trip_planning_service_clamps_stale_start_time_for_motis() -> None
     assert motis.last_plan_request is not None
     assert motis.last_plan_request.time is not None
     assert motis.last_plan_request.time > stale_start
+
+
+@pytest.mark.asyncio
+async def test_trip_planning_service_asks_route_choice() -> None:
+    repository = _FakeTripPlanningRepository()
+    service = TripPlanningService(
+        repository,
+        _FakeValhallaClient(),
+        _SegmentedMotisClient(),
+        use_agent=False,
+    )
+
+    session_id = await service.start_session(
+        TripPlanningRequest(
+            draft_id="draft-1",
+            start_location=GeoCoordinate(lat=48.4, lon=9.99, label="Start"),
+            transport_modes=["walk", "publicTransport"],
+            steps=[
+                ItineraryStepDraft(
+                    id="step-1",
+                    type="eat",
+                    title="Eat",
+                    details="lunch",
+                    time=TimeConstraint(duration_minutes=45),
+                    location=LocationConstraint(
+                        type="exactPoint",
+                        point=GeoCoordinate(lat=48.401, lon=9.991),
+                    ),
+                )
+            ],
+        )
+    )
+
+    frame = await _collect_sse_until_question(service, session_id)
+    snapshot = await service.get_session(session_id)
+    assert "event: question" in frame
+    assert snapshot.current_question is not None
+    assert snapshot.current_question.kind == "routeChoice"
+    assert len(snapshot.current_question.options) == 2
+    public_transport = next(
+        option
+        for option in snapshot.current_question.options
+        if option.payload is not None and option.payload["mode"] == "publicTransport"
+    )
+
+    await service.answer_question(
+        session_id,
+        _answer(snapshot.current_question.id, public_transport.id),
+    )
+    await _collect_sse_until_done(service, session_id)
+    snapshot = await service.get_session(session_id)
+    await service.close()
+
+    assert snapshot.state == "completed"
+    assert snapshot.final_plan is not None
+    travel = snapshot.final_plan.items[0]
+    assert travel.type == "travel"
+    assert travel.transport_mode == "publicTransport"
+    assert repository.route_candidates[public_transport.id].selected_at is not None
+
+
+@pytest.mark.asyncio
+async def test_trip_planning_service_auto_selects_single_route() -> None:
+    repository = _FakeTripPlanningRepository()
+    service = TripPlanningService(
+        repository,
+        _FakeValhallaClient(),
+        _FakeMotisClient(),
+        use_agent=False,
+    )
+
+    session_id = await service.start_session(
+        TripPlanningRequest(
+            draft_id="draft-1",
+            start_location=GeoCoordinate(lat=48.4, lon=9.99, label="Start"),
+            transport_modes=["walk"],
+            steps=[
+                ItineraryStepDraft(
+                    id="step-1",
+                    type="eat",
+                    title="Eat",
+                    details="lunch",
+                    time=TimeConstraint(duration_minutes=45),
+                    location=LocationConstraint(
+                        type="exactPoint",
+                        point=GeoCoordinate(lat=48.401, lon=9.991),
+                    ),
+                )
+            ],
+        )
+    )
+
+    await _collect_sse_until_done(service, session_id)
+    await service.close()
+
+    assert len(repository.route_candidates) == 1
+    candidate = next(iter(repository.route_candidates.values()))
+    assert candidate.selected_at is not None
+    assert [
+        event.payload.type for event in repository.events[session_id]
+    ] == ["status", "finalPlan", "done"]
 
 
 @pytest.mark.asyncio
@@ -491,9 +596,13 @@ async def test_agent_trip_planner_converts_agent_output_to_trip_plan(
         inp: Any,
         session_id: str | None = None,
         ask_user: Any = None,
+        route_between: Any = None,
+        route_chain: Any = None,
     ) -> TripPlanOutput:
         assert session_id == "session-1"
         assert ask_user is not None
+        assert route_between is not None
+        assert route_chain is not None
         assert inp.trip_locations[0].city == "Ulm"
         assert inp.trip_locations[0].category == "restaurant"
         return TripPlanOutput(
@@ -514,19 +623,30 @@ async def test_agent_trip_planner_converts_agent_output_to_trip_plan(
         )
 
     monkeypatch.setattr(pydantic_ai_local, "plan_trip", fake_plan_trip)
-    planner = AgentTripPlanner(repository, lambda *args: None)
+    planner = AgentTripPlanner(
+        repository,
+        lambda *args: None,
+        TripRouteCandidateService(
+            repository,
+            _FakeValhallaClient(),
+            _FakeMotisClient(),
+            lambda *args: None,
+        ),
+    )
 
     plan = await planner.build_plan("session-1")
 
     assert plan.summary == "Agent-picked restaurant."
-    assert plan.items[0].title == "Rice House"
-    assert plan.items[0].location == GeoCoordinate(
+    assert plan.items[0].type == "travel"
+    assert plan.items[0].geometry
+    assert plan.items[1].title == "Rice House"
+    assert plan.items[1].location == GeoCoordinate(
         lat=48.402,
         lon=9.992,
         label="Rice House",
     )
-    assert plan.items[0].visual_target is not None
-    assert plan.items[0].visual_target.type == "exactPoint"
+    assert plan.items[1].visual_target is not None
+    assert plan.items[1].visual_target.type == "exactPoint"
 
 
 @pytest.mark.asyncio
@@ -666,6 +786,43 @@ def test_trip_planning_request_validates_time_interval() -> None:
         )
 
 
+def test_route_candidate_record_uses_surreal_datetimes() -> None:
+    from surrealdb import Datetime
+
+    candidate = RouteCandidate(
+        id="candidate-1",
+        session_id="session-1",
+        leg_key="leg-1",
+        start=GeoCoordinate(lat=48.4, lon=9.99),
+        destination=GeoCoordinate(lat=48.401, lon=9.991),
+        mode="walk",
+        duration_seconds=120,
+        distance_meters=200,
+        geometry=[],
+        description="Walk 200 m.",
+        segments=[
+            TripRouteSegment(
+                transport_mode="walk",
+                geometry=[],
+                description="Walk 200 m.",
+            )
+        ],
+        provider="valhalla",
+        depart_at=datetime.fromisoformat("2026-06-07T12:00:00+02:00"),
+        selected_at=datetime.fromisoformat("2026-06-07T10:01:00+00:00"),
+        created_at=datetime.fromisoformat("2026-06-07T10:00:00+00:00"),
+    )
+
+    record = _route_candidate_record(candidate)
+
+    assert isinstance(record["departAt"], Datetime)
+    assert record["departAt"].dt == "2026-06-07T10:00:00Z"
+    assert isinstance(record["selectedAt"], Datetime)
+    assert record["selectedAt"].dt == "2026-06-07T10:01:00Z"
+    assert isinstance(record["createdAt"], Datetime)
+    assert record["createdAt"].dt == "2026-06-07T10:00:00Z"
+
+
 async def _collect_sse_until_done(
     service: TripPlanningService, session_id: str
 ) -> list[str]:
@@ -712,6 +869,7 @@ class _FakeTripPlanningRepository:
     def __init__(self) -> None:
         self.sessions: dict[str, dict[str, Any]] = {}
         self.events: dict[str, list[StoredPlanningEvent]] = {}
+        self.route_candidates: dict[str, RouteCandidate] = {}
 
     async def create_session(
         self, session_id: str, request: TripPlanningRequest, now: datetime
@@ -786,6 +944,43 @@ class _FakeTripPlanningRepository:
                 )
             )
         ]
+
+    async def create_route_candidate(
+        self, candidate: RouteCandidate
+    ) -> RouteCandidate:
+        self.route_candidates[candidate.id] = candidate
+        return candidate
+
+    async def list_route_candidates(
+        self, session_id: str, leg_key: str | None = None
+    ) -> list[RouteCandidate]:
+        return [
+            candidate
+            for candidate in self.route_candidates.values()
+            if candidate.session_id == session_id
+            and (leg_key is None or candidate.leg_key == leg_key)
+        ]
+
+    async def get_route_candidate(
+        self, session_id: str, candidate_id: str
+    ) -> RouteCandidate:
+        candidate = self.route_candidates.get(candidate_id)
+        if candidate is None or candidate.session_id != session_id:
+            raise RoutePlanningError("Route candidate was not found.")
+        return candidate
+
+    async def mark_route_candidate_selected(
+        self, session_id: str, candidate_id: str, selected_at: datetime
+    ) -> RouteCandidate:
+        candidate = await self.get_route_candidate(session_id, candidate_id)
+        selected = candidate.__class__(
+            **{
+                **candidate.__dict__,
+                "selected_at": selected_at,
+            }
+        )
+        self.route_candidates[candidate_id] = selected
+        return selected
 
 
 class _FakeValhallaClient:

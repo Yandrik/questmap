@@ -53,80 +53,90 @@ class _TripPlanningOverlayState extends State<TripPlanningOverlay>
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(16),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 560),
-              child: Material(
-                borderRadius: BorderRadius.circular(12),
-                color: theme.colorScheme.surface,
-                child: Padding(
-                  padding: const EdgeInsets.all(18),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          AnimatedBuilder(
-                            animation: _controller,
-                            builder: (context, child) => Transform.scale(
-                              scale: 1 + _controller.value * 0.12,
-                              child: child,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: 560,
+                    maxHeight: constraints.maxHeight,
+                  ),
+                  child: Material(
+                    borderRadius: BorderRadius.circular(12),
+                    color: theme.colorScheme.surface,
+                    clipBehavior: Clip.antiAlias,
+                    child: Scrollbar(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(18),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                AnimatedBuilder(
+                                  animation: _controller,
+                                  builder: (context, child) => Transform.scale(
+                                    scale: 1 + _controller.value * 0.12,
+                                    child: child,
+                                  ),
+                                  child: Icon(
+                                    Icons.auto_awesome,
+                                    color: theme.colorScheme.primary,
+                                    size: 34,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    'Planning your trip',
+                                    style: theme.textTheme.titleLarge?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Cancel planning',
+                                  onPressed: () => _confirmCancel(context),
+                                  icon: const Icon(Icons.close),
+                                ),
+                              ],
                             ),
-                            child: Icon(
-                              Icons.auto_awesome,
-                              color: theme.colorScheme.primary,
-                              size: 34,
+                            const SizedBox(height: 16),
+                            LinearProgressIndicator(
+                              minHeight: 6,
+                              borderRadius: BorderRadius.circular(999),
                             ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              'Planning your trip',
-                              style: theme.textTheme.titleLarge?.copyWith(
-                                fontWeight: FontWeight.w700,
+                            const SizedBox(height: 16),
+                            Text(
+                              agent.statusMessage ?? _messages[_messageIndex],
+                              style: theme.textTheme.bodyLarge,
+                            ),
+                            Text(
+                              _messages[_messageIndex],
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
                               ),
                             ),
-                          ),
-                          IconButton(
-                            tooltip: 'Cancel planning',
-                            onPressed: () => _confirmCancel(context),
-                            icon: const Icon(Icons.close),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      LinearProgressIndicator(
-                        minHeight: 6,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        agent.statusMessage ?? _messages[_messageIndex],
-                        style: theme.textTheme.bodyLarge,
-                      ),
-                      Text(
-                        _messages[_messageIndex],
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
+                            if (agent.partialPlan != null) ...[
+                              const SizedBox(height: 14),
+                              Text(
+                                'Progress: ${agent.partialPlan!.items.length} steps shaped',
+                                style: theme.textTheme.labelLarge,
+                              ),
+                            ],
+                            if (question != null) ...[
+                              const SizedBox(height: 18),
+                              _QuestionCard(question: question),
+                            ],
+                          ],
                         ),
                       ),
-                      if (agent.partialPlan != null) ...[
-                        const SizedBox(height: 14),
-                        Text(
-                          'Progress: ${agent.partialPlan!.items.length} steps shaped',
-                          style: theme.textTheme.labelLarge,
-                        ),
-                      ],
-                      if (question != null) ...[
-                        const SizedBox(height: 18),
-                        _QuestionCard(question: question),
-                      ],
-                    ],
+                    ),
                   ),
                 ),
-              ),
-            ),
+              );
+            },
           ),
         ),
       ),
@@ -277,7 +287,7 @@ class _QuestionCardState extends State<_QuestionCard> {
               TripPlanningQuestionKind.selection => _SelectionAnswer(
                 question: question,
               ),
-              TripPlanningQuestionKind.routeChoice => _SelectionAnswer(
+              TripPlanningQuestionKind.routeChoice => _SingleSelectionAnswer(
                 question: question,
               ),
             },
@@ -349,8 +359,101 @@ class _TextAnswer extends StatelessWidget {
   }
 }
 
-class _SelectionAnswer extends StatelessWidget {
+class _SelectionAnswer extends StatefulWidget {
   const _SelectionAnswer({required this.question});
+
+  final TripPlanningQuestion question;
+
+  @override
+  State<_SelectionAnswer> createState() => _SelectionAnswerState();
+}
+
+class _SelectionAnswerState extends State<_SelectionAnswer> {
+  final _selectedOptionIds = <String>{};
+
+  @override
+  void didUpdateWidget(_SelectionAnswer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.question.id != widget.question.id) {
+      _selectedOptionIds.clear();
+      return;
+    }
+    final optionIds = widget.question.options
+        .map((option) => option.id)
+        .toSet();
+    _selectedOptionIds.removeWhere((optionId) => !optionIds.contains(optionId));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final question = widget.question;
+    final theme = Theme.of(context);
+
+    return Column(
+      children: [
+        for (final option in question.options)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: _OptionTile(
+              option: option,
+              selected: _selectedOptionIds.contains(option.id),
+              leading: IgnorePointer(
+                child: Checkbox(
+                  value: _selectedOptionIds.contains(option.id),
+                  onChanged: (_) => _toggleOption(option.id),
+                ),
+              ),
+              onTap: () => _toggleOption(option.id),
+            ),
+          ),
+        Align(
+          alignment: Alignment.centerRight,
+          child: FilledButton(
+            onPressed: _selectedOptionIds.isEmpty
+                ? null
+                : () => di<TripAgentManager>().answerQuestion(
+                    question.options
+                        .where(
+                          (option) => _selectedOptionIds.contains(option.id),
+                        )
+                        .map((option) => option.id)
+                        .toList(),
+                  ),
+            child: Text(
+              _selectedOptionIds.length <= 1
+                  ? 'Submit'
+                  : 'Submit ${_selectedOptionIds.length}',
+            ),
+          ),
+        ),
+        if (_selectedOptionIds.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                'Choose at least one',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  void _toggleOption(String optionId) {
+    setState(() {
+      if (!_selectedOptionIds.add(optionId)) {
+        _selectedOptionIds.remove(optionId);
+      }
+    });
+  }
+}
+
+class _SingleSelectionAnswer extends StatelessWidget {
+  const _SingleSelectionAnswer({required this.question});
 
   final TripPlanningQuestion question;
 
@@ -361,30 +464,68 @@ class _SelectionAnswer extends StatelessWidget {
         for (final option in question.options)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: ListTile(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              tileColor: Theme.of(context).colorScheme.surface,
-              leading: option.imageUrl == null
-                  ? const Icon(Icons.place)
-                  : ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: Image.network(
-                        option.imageUrl!,
-                        width: 48,
-                        height: 48,
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-              title: Text(option.title),
-              subtitle: option.description == null
-                  ? null
-                  : Text(option.description!),
+            child: _OptionTile(
+              option: option,
+              leading: const Icon(Icons.route),
               onTap: () => di<TripAgentManager>().answerQuestion(option.id),
             ),
           ),
       ],
+    );
+  }
+}
+
+class _OptionTile extends StatelessWidget {
+  const _OptionTile({
+    required this.option,
+    required this.leading,
+    required this.onTap,
+    this.selected = false,
+  });
+
+  final TripQuestionOption option;
+  final Widget leading;
+  final VoidCallback onTap;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final shape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(8),
+    );
+
+    return Material(
+      type: MaterialType.transparency,
+      shape: shape,
+      clipBehavior: Clip.antiAlias,
+      child: ListTile(
+        shape: shape,
+        tileColor: selected
+            ? theme.colorScheme.secondaryContainer.withValues(alpha: 0.7)
+            : theme.colorScheme.surface,
+        leading: leading,
+        trailing: option.imageUrl == null
+            ? null
+            : _OptionImage(imageUrl: option.imageUrl!),
+        title: Text(option.title),
+        subtitle: option.description == null ? null : Text(option.description!),
+        onTap: onTap,
+      ),
+    );
+  }
+}
+
+class _OptionImage extends StatelessWidget {
+  const _OptionImage({required this.imageUrl});
+
+  final String imageUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(6),
+      child: Image.network(imageUrl, width: 48, height: 48, fit: BoxFit.cover),
     );
   }
 }

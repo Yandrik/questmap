@@ -223,4 +223,44 @@ void main() {
     expect(event.question!.kind, TripPlanningQuestionKind.yesNo);
     expect(event.question!.prompt, contains('walking'));
   });
+
+  test('parses route-choice payloads', () {
+    final event = TripPlanningEvent.fromSse(
+      const ServerSentEvent(
+        type: 'question',
+        data: {
+          'type': 'question',
+          'question': {
+            'id': 'q-route',
+            'kind': 'routeChoice',
+            'prompt': 'Choose a route.',
+            'options': [
+              {
+                'id': 'candidate-1',
+                'title': 'Public transport',
+                'description': '12 min, 1.2 km. Bus 7.',
+                'payload': {
+                  'routeCandidateId': 'candidate-1',
+                  'mode': 'publicTransport',
+                  'durationSeconds': 720,
+                  'distanceMeters': 1200.0,
+                  'transferCount': 0,
+                  'summary': 'Bus 7, about 12 min.',
+                },
+              },
+            ],
+          },
+        },
+      ),
+    );
+
+    final question = event.question!;
+    final option = question.options.single;
+
+    expect(question.kind, TripPlanningQuestionKind.routeChoice);
+    expect(option.id, 'candidate-1');
+    expect(option.payload!['routeCandidateId'], 'candidate-1');
+    expect(option.payload!['mode'], 'publicTransport');
+    expect(option.payload!['durationSeconds'], 720);
+  });
 }
