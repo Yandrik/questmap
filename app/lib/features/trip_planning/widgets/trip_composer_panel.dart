@@ -627,7 +627,7 @@ class _ItineraryStepCard extends StatelessWidget {
                   ),
                 ),
                 if (step.location.type != LocationConstraintType.wherever) ...[
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 0),
                   Flexible(
                     child: _TripLocationInput(
                       label: 'Location',
