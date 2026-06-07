@@ -45,6 +45,10 @@ SESSION_TABLE = "trip_planning_session"
 EVENT_TABLE = "trip_planning_event"
 ROUTE_CANDIDATE_TABLE = "trip_planning_route_candidate"
 NEARBY_DIRECT_WALK_METERS = 15.0
+TRIP_PLANNING_OPTION_LIMIT = 6
+VALHALLA_ALTERNATE_COUNT = 3
+MOTIS_ITINERARY_COUNT = 4
+MOTIS_LEG_ALTERNATIVE_COUNT = 3
 
 logger = logging.getLogger(__name__)
 
@@ -482,7 +486,11 @@ class TripPlanningService:
             self.ask_user,
         )
         self._override_planner = planner
-        self._deterministic_planner = TripPlanner(repository, route_candidates)
+        self._deterministic_planner = TripPlanner(
+            repository,
+            route_candidates,
+            self.ask_user,
+        )
         self._agent_planner = (
             AgentTripPlanner(
                 repository,
@@ -918,7 +926,7 @@ class TripRouteCandidateService:
                     arrive_by.isoformat() if arrive_by is not None else None,
                 )
                 if mode == "publicTransport":
-                    candidate = await self._route_with_motis(
+                    mode_candidates = await self._routes_with_motis(
                         session_id,
                         leg_key,
                         start,
@@ -927,7 +935,7 @@ class TripRouteCandidateService:
                         arrive_by,
                     )
                 else:
-                    candidate = await self._route_with_valhalla(
+                    mode_candidates = await self._routes_with_valhalla(
                         session_id,
                         leg_key,
                         start,
@@ -936,9 +944,10 @@ class TripRouteCandidateService:
                         depart_at,
                         arrive_by,
                     )
-                candidates.append(
-                    await self._repository.create_route_candidate(candidate)
-                )
+                for candidate in mode_candidates:
+                    candidates.append(
+                        await self._repository.create_route_candidate(candidate)
+                    )
             except (
                 RoutePlanningError,
                 httpx.HTTPError,
@@ -984,6 +993,7 @@ class TripRouteCandidateService:
             depart_at=depart_at,
             arrive_by=arrive_by,
         )
+        candidates = sorted(candidates, key=lambda candidate: candidate.duration_seconds)
         if len(candidates) == 1:
             return await self._repository.mark_route_candidate_selected(
                 session_id,
@@ -991,7 +1001,11 @@ class TripRouteCandidateService:
                 _utc_now(),
             )
 
-        options = [_route_choice_option(candidate) for candidate in candidates]
+        offered_candidates = candidates[:TRIP_PLANNING_OPTION_LIMIT]
+        options = [
+            _route_choice_option(candidate, index)
+            for index, candidate in enumerate(offered_candidates, start=1)
+        ]
         answer = await self._ask_user(
             session_id,
             "routeChoice",
@@ -999,7 +1013,7 @@ class TripRouteCandidateService:
             options,
         )
         candidate_id = _route_candidate_id_from_answer(answer)
-        if candidate_id not in {candidate.id for candidate in candidates}:
+        if candidate_id not in {candidate.id for candidate in offered_candidates}:
             raise InvalidAnswerError("routeChoice answer must reference a candidate")
         return await self._repository.mark_route_candidate_selected(
             session_id,
@@ -1037,7 +1051,7 @@ class TripRouteCandidateService:
     async def get_candidate(self, session_id: str, candidate_id: str) -> RouteCandidate:
         return await self._repository.get_route_candidate(session_id, candidate_id)
 
-    async def _route_with_valhalla(
+    async def _routes_with_valhalla(
         self,
         session_id: str,
         leg_key: str,
@@ -1046,7 +1060,7 @@ class TripRouteCandidateService:
         mode: TransportMode,
         depart_at: datetime | None,
         arrive_by: datetime | None,
-    ) -> RouteCandidate:
+    ) -> list[RouteCandidate]:
         costing = _valhalla_costing(mode)
         response = await self._valhalla.route(
             ValhallaRouteRequest(
@@ -1065,46 +1079,28 @@ class TripRouteCandidateService:
                 costing=costing,
                 shape_format="geojson",
                 directions_type="none",
-                alternates=0,
+                alternates=VALHALLA_ALTERNATE_COUNT,
             )
         )
-        trip = _dict_value(response.get("trip"))
-        if trip is None:
+        trips = _valhalla_trips(response)
+        if not trips:
             raise RoutePlanningError("Valhalla response did not contain a trip")
-        summary = _dict_value(trip.get("summary")) or {}
-        duration = _int_value(summary.get("time")) or 0
-        length_km = _float_value(summary.get("length"))
-        geometry = [
-            *_coordinates_from_any(trip.get("shape")),
-            *_coordinates_from_valhalla_legs(trip.get("legs")),
+        return [
+            _valhalla_route_candidate(
+                trip=trip,
+                raw_payload=raw_payload,
+                session_id=session_id,
+                leg_key=leg_key,
+                start=start,
+                destination=destination,
+                mode=mode,
+                depart_at=depart_at,
+                arrive_by=arrive_by,
+            )
+            for trip, raw_payload in trips
         ]
-        description = _route_description(mode, duration, length_km)
-        return RouteCandidate(
-            id=uuid4().hex,
-            session_id=session_id,
-            leg_key=leg_key,
-            start=start,
-            destination=destination,
-            mode=mode,
-            duration_seconds=duration,
-            distance_meters=None if length_km is None else length_km * 1000,
-            geometry=geometry,
-            description=description,
-            segments=[
-                TripRouteSegment(
-                    transport_mode=mode,
-                    geometry=geometry,
-                    description=description,
-                )
-            ],
-            provider="valhalla",
-            depart_at=depart_at,
-            arrive_by=arrive_by,
-            raw_provider_payload=response,
-            created_at=_utc_now(),
-        )
 
-    async def _route_with_motis(
+    async def _routes_with_motis(
         self,
         session_id: str,
         leg_key: str,
@@ -1112,7 +1108,7 @@ class TripRouteCandidateService:
         destination: GeoCoordinate,
         depart_at: datetime,
         arrive_by: datetime | None,
-    ) -> RouteCandidate:
+    ) -> list[RouteCandidate]:
         response = await self._motis.plan(
             MotisPlanRequest(
                 fromPlace=_motis_place(start),
@@ -1126,8 +1122,8 @@ class TripRouteCandidateService:
                 preTransitModes=["WALK"],
                 postTransitModes=["WALK"],
                 transitModes=["TRANSIT"],
-                numItineraries=1,
-                numLegAlternatives=0,
+                numItineraries=MOTIS_ITINERARY_COUNT,
+                numLegAlternatives=MOTIS_LEG_ALTERNATIVE_COUNT,
                 timetableView=False,
                 language=["de", "en"],
             )
@@ -1135,42 +1131,131 @@ class TripRouteCandidateService:
         itineraries = response.get("itineraries")
         if not isinstance(itineraries, list) or not itineraries:
             raise RoutePlanningError("MOTIS response did not contain itineraries")
-        itinerary = _dict_value(itineraries[0])
-        if itinerary is None:
+        candidates = [
+            _motis_route_candidate(
+                itinerary=itinerary,
+                session_id=session_id,
+                leg_key=leg_key,
+                start=start,
+                destination=destination,
+                depart_at=depart_at,
+                arrive_by=arrive_by,
+            )
+            for raw_itinerary in itineraries
+            if (itinerary := _dict_value(raw_itinerary)) is not None
+        ]
+        if not candidates:
             raise RoutePlanningError("MOTIS itinerary was not an object")
-        legs = itinerary.get("legs")
-        duration = _int_value(itinerary.get("duration"))
-        if duration is None:
-            duration = _motis_legs_duration(legs)
-        distance = _motis_legs_distance(legs)
-        geometry = _coordinates_from_motis_legs(legs)
-        segments = _segments_from_motis_legs(legs)
-        description = _motis_description(legs, duration)
-        return RouteCandidate(
-            id=uuid4().hex,
-            session_id=session_id,
-            leg_key=leg_key,
-            start=start,
-            destination=destination,
-            mode="publicTransport",
-            duration_seconds=duration,
-            distance_meters=distance,
-            geometry=geometry,
-            description=description,
-            segments=segments
-            or [
-                TripRouteSegment(
-                    transport_mode="publicTransport",
-                    geometry=geometry,
-                    description=description,
-                )
-            ],
-            provider="motis",
-            depart_at=depart_at,
-            arrive_by=arrive_by,
-            raw_provider_payload=response,
-            created_at=_utc_now(),
-        )
+        return candidates
+
+
+def _valhalla_trips(
+    response: dict[str, Any],
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    trips: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    trip = _dict_value(response.get("trip"))
+    if trip is not None:
+        trips.append((trip, response))
+    alternates = response.get("alternates")
+    if isinstance(alternates, list):
+        for raw_alternate in alternates:
+            alternate = _dict_value(raw_alternate)
+            if alternate is None:
+                continue
+            alternate_trip = _dict_value(alternate.get("trip")) or alternate
+            trips.append((alternate_trip, alternate))
+    return trips
+
+
+def _valhalla_route_candidate(
+    *,
+    trip: dict[str, Any],
+    raw_payload: dict[str, Any],
+    session_id: str,
+    leg_key: str,
+    start: GeoCoordinate,
+    destination: GeoCoordinate,
+    mode: TransportMode,
+    depart_at: datetime | None,
+    arrive_by: datetime | None,
+) -> RouteCandidate:
+    summary = _dict_value(trip.get("summary")) or {}
+    duration = _int_value(summary.get("time")) or 0
+    length_km = _float_value(summary.get("length"))
+    geometry = [
+        *_coordinates_from_any(trip.get("shape")),
+        *_coordinates_from_valhalla_legs(trip.get("legs")),
+    ]
+    description = _route_description(mode, duration, length_km)
+    return RouteCandidate(
+        id=uuid4().hex,
+        session_id=session_id,
+        leg_key=leg_key,
+        start=start,
+        destination=destination,
+        mode=mode,
+        duration_seconds=duration,
+        distance_meters=None if length_km is None else length_km * 1000,
+        geometry=geometry,
+        description=description,
+        segments=[
+            TripRouteSegment(
+                transport_mode=mode,
+                geometry=geometry,
+                description=description,
+            )
+        ],
+        provider="valhalla",
+        depart_at=depart_at,
+        arrive_by=arrive_by,
+        raw_provider_payload=raw_payload,
+        created_at=_utc_now(),
+    )
+
+
+def _motis_route_candidate(
+    *,
+    itinerary: dict[str, Any],
+    session_id: str,
+    leg_key: str,
+    start: GeoCoordinate,
+    destination: GeoCoordinate,
+    depart_at: datetime,
+    arrive_by: datetime | None,
+) -> RouteCandidate:
+    legs = itinerary.get("legs")
+    duration = _int_value(itinerary.get("duration"))
+    if duration is None:
+        duration = _motis_legs_duration(legs)
+    distance = _motis_legs_distance(legs)
+    geometry = _coordinates_from_motis_legs(legs)
+    segments = _segments_from_motis_legs(legs)
+    description = _motis_description(legs, duration)
+    return RouteCandidate(
+        id=uuid4().hex,
+        session_id=session_id,
+        leg_key=leg_key,
+        start=start,
+        destination=destination,
+        mode="publicTransport",
+        duration_seconds=duration,
+        distance_meters=distance,
+        geometry=geometry,
+        description=description,
+        segments=segments
+        or [
+            TripRouteSegment(
+                transport_mode="publicTransport",
+                geometry=geometry,
+                description=description,
+            )
+        ],
+        provider="motis",
+        depart_at=depart_at,
+        arrive_by=arrive_by,
+        raw_provider_payload=itinerary,
+        created_at=_utc_now(),
+    )
 
 
 class TripPlanner:
@@ -1178,9 +1263,11 @@ class TripPlanner:
         self,
         repository: TripPlanningRepository,
         route_candidates: TripRouteCandidateService,
+        ask_user: Any,
     ) -> None:
         self._repository = repository
         self._route_candidates = route_candidates
+        self._ask_user = ask_user
 
     async def build_plan(self, session_id: str) -> TripPlan:
         session = await self._repository.get_session(session_id)
@@ -1205,74 +1292,101 @@ class TripPlanner:
                 step.type,
                 step.title,
             )
-            activity_location = await self._resolve_activity_location(step, cursor)
+            activity_locations = await self._resolve_activity_locations(
+                session_id,
+                step,
+                cursor,
+            )
             logger.info(
-                "Resolved step location session_id=%s step_index=%s "
-                "location=%s label=%s",
+                "Resolved step locations session_id=%s step_index=%s count=%s",
                 session_id,
                 index,
-                _coord_log(activity_location),
-                activity_location.label,
+                len(activity_locations),
             )
-            if not _same_place(cursor, activity_location):
-                route = await self._route_candidates.select_route(
-                    session_id=session_id,
-                    leg_key=f"step-{index}",
-                    start=cursor,
-                    destination=activity_location,
-                    modes=request.transport_modes,
-                    depart_at=current_time,
-                    title=f"Travel to {step.title}",
-                )
-                logger.info(
-                    "Selected route for step session_id=%s step_index=%s "
-                    "mode=%s duration_seconds=%s distance_meters=%s",
-                    session_id,
+            activity_duration = _split_activity_duration(
+                step.time.duration_minutes,
+                len(activity_locations),
+            )
+            for location_index, activity_location in enumerate(
+                activity_locations,
+                start=1,
+            ):
+                item_suffix = _expanded_item_suffix(
                     index,
-                    route.mode,
-                    route.duration_seconds,
-                    _round_optional(route.distance_meters),
+                    location_index,
+                    len(activity_locations),
                 )
-                travel_start = current_time
-                travel_end = current_time + timedelta(seconds=route.duration_seconds)
+                activity_title = _activity_title(
+                    step,
+                    activity_location,
+                    len(activity_locations),
+                )
+
+                if not _same_place(cursor, activity_location):
+                    route = await self._route_candidates.select_route(
+                        session_id=session_id,
+                        leg_key=f"step-{item_suffix}",
+                        start=cursor,
+                        destination=activity_location,
+                        modes=request.transport_modes,
+                        depart_at=current_time,
+                        title=f"Travel to {activity_title}",
+                    )
+                    logger.info(
+                        "Selected route for step session_id=%s step_index=%s "
+                        "location_index=%s mode=%s duration_seconds=%s "
+                        "distance_meters=%s",
+                        session_id,
+                        index,
+                        location_index,
+                        route.mode,
+                        route.duration_seconds,
+                        _round_optional(route.distance_meters),
+                    )
+                    travel_start = current_time
+                    travel_end = current_time + timedelta(
+                        seconds=route.duration_seconds
+                    )
+                    items.append(
+                        TripPlanItem(
+                            id=f"travel-{item_suffix}",
+                            type="travel",
+                            title=f"Travel to {activity_title}",
+                            description=route.description,
+                            reasoning="Selected from available route alternatives.",
+                            transport_mode=route.mode,
+                            start_time=travel_start,
+                            end_time=travel_end,
+                            geometry=route.geometry,
+                            segments=route.segments,
+                        )
+                    )
+                    current_time = travel_end
+
+                activity_start = _activity_start_time(step, current_time)
+                activity_end = activity_start + activity_duration
                 items.append(
                     TripPlanItem(
-                        id=f"travel-{index}",
-                        type="travel",
-                        title=f"Travel to {step.title}",
-                        description=route.description,
-                        reasoning="Selected as the fastest reachable route.",
-                        transport_mode=route.mode,
-                        start_time=travel_start,
-                        end_time=travel_end,
-                        geometry=route.geometry,
-                        segments=route.segments,
+                        id=f"activity-{item_suffix}",
+                        type="activity",
+                        title=activity_title,
+                        description=step.details or activity_title,
+                        reasoning=_activity_reasoning(step, activity_location),
+                        source_draft_step_id=step.id,
+                        step_type=step.type,
+                        start_time=activity_start,
+                        end_time=activity_end,
+                        location=activity_location,
+                        visual_target=_visual_target_for_activity(
+                            step,
+                            activity_location,
+                            len(activity_locations),
+                        ),
+                        geometry=[],
                     )
                 )
-                current_time = travel_end
-
-            activity_start = _activity_start_time(step, current_time)
-            activity_end = activity_start + timedelta(
-                minutes=step.time.duration_minutes
-            )
-            items.append(
-                TripPlanItem(
-                    id=f"activity-{index}",
-                    type="activity",
-                    title=step.title,
-                    description=step.details or step.title,
-                    reasoning=_activity_reasoning(step, activity_location),
-                    source_draft_step_id=step.id,
-                    step_type=step.type,
-                    start_time=activity_start,
-                    end_time=activity_end,
-                    location=activity_location,
-                    visual_target=_visual_target_for_step(step),
-                    geometry=[],
-                )
-            )
-            cursor = activity_location
-            current_time = activity_end
+                cursor = activity_location
+                current_time = activity_end
 
         if request.end_location is not None and not _same_place(
             cursor, request.end_location
@@ -1323,9 +1437,12 @@ class TripPlanner:
             items=items,
         )
 
-    async def _resolve_activity_location(
-        self, step: ItineraryStepDraft, cursor: GeoCoordinate
-    ) -> GeoCoordinate:
+    async def _resolve_activity_locations(
+        self,
+        session_id: str,
+        step: ItineraryStepDraft,
+        cursor: GeoCoordinate,
+    ) -> list[GeoCoordinate]:
         constraint = step.location
         if constraint.type == "exactPoint" and constraint.point is not None:
             logger.debug(
@@ -1333,7 +1450,7 @@ class TripPlanner:
                 step.id,
                 _coord_log(constraint.point),
             )
-            return _with_default_label(constraint.point, step.title)
+            return [_with_default_label(constraint.point, step.title)]
 
         if constraint.type == "aroundPoint" and constraint.point is not None:
             center = constraint.point
@@ -1350,25 +1467,46 @@ class TripPlanner:
             center=center,
             radius_meters=radius_meters,
             category_filter=_category_filter(step.type),
-            limit=5,
+            limit=TRIP_PLANNING_OPTION_LIMIT,
         )
         if candidates:
+            options = [
+                _poi_choice_option(step, candidate, option_index)
+                for option_index, candidate in enumerate(candidates, start=1)
+            ]
+            answer = await self._ask_user(
+                session_id,
+                "selection",
+                f"Choose places for {step.title}.",
+                options,
+            )
+            selected_ids = _selected_option_ids_from_answer(answer)
+            selected = [
+                candidate
+                for option, candidate in zip(options, candidates, strict=True)
+                if option["id"] in selected_ids
+            ]
+            if not selected:
+                raise InvalidAnswerError("selection answers must reference an option")
             logger.info(
-                "Using nearest POI for step step_id=%s candidates=%s "
-                "distance_meters=%s family=%s type=%s",
+                "Using selected POIs for step step_id=%s candidates=%s selected=%s",
                 step.id,
                 len(candidates),
-                _round_optional(candidates[0].distance_meters),
-                candidates[0].primary_family,
-                candidates[0].primary_type,
+                len(selected),
             )
-            return _with_default_label(candidates[0].coordinate, step.title)
+            return _greedy_order_coordinates(
+                [
+                    _with_default_label(candidate.coordinate, step.title)
+                    for candidate in selected
+                ],
+                cursor,
+            )
         logger.info(
             "No POI candidates found for step step_id=%s; using center=%s",
             step.id,
             _coord_log(center),
         )
-        return _with_default_label(center, step.title)
+        return [_with_default_label(center, step.title)]
 
 
 class AgentTripPlanner:
@@ -1683,6 +1821,8 @@ def _validate_answer_value(question: TripPlanningQuestion, value: Any) -> None:
             return
         if isinstance(value, dict):
             return
+        if isinstance(value, list) and not value:
+            raise InvalidAnswerError("selection answers must reference an option")
         if isinstance(value, list) and all(
             isinstance(item, dict)
             or (isinstance(item, str) and (not valid_ids or item in valid_ids))
@@ -1840,11 +1980,11 @@ def _route_candidate_from_record(record: Any) -> RouteCandidate:
     )
 
 
-def _route_choice_option(candidate: RouteCandidate) -> dict[str, Any]:
+def _route_choice_option(candidate: RouteCandidate, index: int) -> dict[str, Any]:
     summary = _route_candidate_summary(candidate)
     return {
         "id": candidate.id,
-        "title": summary["title"],
+        "title": f"{summary['title']} option {index}",
         "description": summary["description"],
         "routeCandidateId": candidate.id,
         "mode": candidate.mode,
@@ -1859,6 +1999,46 @@ def _route_choice_option(candidate: RouteCandidate) -> dict[str, Any]:
         else None,
         "summary": candidate.description,
     }
+
+
+def _poi_choice_option(
+    step: ItineraryStepDraft,
+    candidate: PoiCandidate,
+    index: int,
+) -> dict[str, Any]:
+    coordinate = _with_default_label(candidate.coordinate, step.title)
+    category = _poi_category_label(candidate)
+    distance = (
+        None
+        if candidate.distance_meters is None
+        else _distance_label(candidate.distance_meters)
+    )
+    description_parts = [
+        part for part in (distance, category) if part is not None and part
+    ]
+    return {
+        "id": f"poi-{index}",
+        "title": coordinate.label or step.title,
+        "description": " · ".join(description_parts) or None,
+        "lat": coordinate.lat,
+        "lon": coordinate.lon,
+        "label": coordinate.label,
+        "distanceMeters": candidate.distance_meters,
+        "primaryFamily": candidate.primary_family,
+        "primaryType": candidate.primary_type,
+        "sourceDraftStepId": step.id,
+    }
+
+
+def _poi_category_label(candidate: PoiCandidate) -> str | None:
+    values = [
+        value.replace("_", " ")
+        for value in (candidate.primary_type, candidate.primary_family)
+        if value
+    ]
+    if not values:
+        return None
+    return " / ".join(values)
 
 
 def _route_candidate_summary(candidate: RouteCandidate) -> dict[str, Any]:
@@ -1913,6 +2093,27 @@ def _route_candidate_id_from_answer(answer: Any) -> str:
     raise InvalidAnswerError("routeChoice answer must reference a route candidate")
 
 
+def _selected_option_ids_from_answer(answer: Any) -> list[str]:
+    if isinstance(answer, str):
+        return [answer]
+    if isinstance(answer, dict):
+        value = answer.get("id") or answer.get("value")
+        if isinstance(value, str):
+            return [value]
+    if isinstance(answer, list):
+        selected_ids: list[str] = []
+        for item in answer:
+            if isinstance(item, str):
+                selected_ids.append(item)
+            elif isinstance(item, dict):
+                value = item.get("id") or item.get("value")
+                if isinstance(value, str):
+                    selected_ids.append(value)
+        if selected_ids:
+            return selected_ids
+    raise InvalidAnswerError("selection answers must reference an option")
+
+
 def _surreal_datetime(value: datetime) -> Datetime:
     value = _ensure_aware(value).astimezone(UTC)
     return Datetime(value.isoformat().replace("+00:00", "Z"))
@@ -1956,6 +2157,15 @@ def _activity_start_time(step: ItineraryStepDraft, current_time: datetime) -> da
     return max(current_time, _ensure_aware(start))
 
 
+def _split_activity_duration(
+    duration_minutes: int,
+    activity_count: int,
+) -> timedelta:
+    count = max(1, activity_count)
+    total_seconds = duration_minutes * 60
+    return timedelta(seconds=round(total_seconds / count))
+
+
 def _ensure_aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
@@ -1966,6 +2176,26 @@ def _plan_title(request: TripPlanningRequest) -> str:
     if len(request.steps) == 1:
         return request.steps[0].title
     return f"{len(request.steps)} stop trip"
+
+
+def _expanded_item_suffix(
+    step_index: int,
+    location_index: int,
+    location_count: int,
+) -> str:
+    if location_count == 1:
+        return str(step_index)
+    return f"{step_index}-{location_index}"
+
+
+def _activity_title(
+    step: ItineraryStepDraft,
+    coordinate: GeoCoordinate,
+    location_count: int,
+) -> str:
+    if location_count > 1 and coordinate.label:
+        return coordinate.label
+    return step.title
 
 
 def _activity_reasoning(
@@ -1981,6 +2211,34 @@ def _visual_target_for_step(step: ItineraryStepDraft) -> LocationConstraint | No
     if step.location.type in {"exactPoint", "aroundPoint", "areaCircle"}:
         return step.location
     return None
+
+
+def _visual_target_for_activity(
+    step: ItineraryStepDraft,
+    coordinate: GeoCoordinate,
+    location_count: int,
+) -> LocationConstraint | None:
+    if location_count > 1 or step.location.type != "exactPoint":
+        return LocationConstraint(type="exactPoint", point=coordinate)
+    return _visual_target_for_step(step)
+
+
+def _greedy_order_coordinates(
+    coordinates: list[GeoCoordinate],
+    start: GeoCoordinate,
+) -> list[GeoCoordinate]:
+    remaining = list(coordinates)
+    ordered: list[GeoCoordinate] = []
+    cursor = start
+    while remaining:
+        closest = min(
+            remaining,
+            key=lambda coordinate: _distance_meters(cursor, coordinate),
+        )
+        remaining.remove(closest)
+        ordered.append(closest)
+        cursor = closest
+    return ordered
 
 
 def _category_filter(step_type: ItineraryStepType) -> PoiCategoryFilter | None:

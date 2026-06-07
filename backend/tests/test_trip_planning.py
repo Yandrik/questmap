@@ -91,7 +91,7 @@ async def test_trip_planning_service_emits_route_complete_final_plan() -> None:
 
 
 @pytest.mark.asyncio
-async def test_trip_planning_service_preserves_activity_visual_targets() -> None:
+async def test_trip_planning_service_uses_exact_visual_targets_for_selected_pois() -> None:
     repository = _FakeTripPlanningRepository()
     service = TripPlanningService(
         repository,
@@ -133,6 +133,20 @@ async def test_trip_planning_service_preserves_activity_visual_targets() -> None
         )
     )
 
+    first_question = await _wait_for_current_question(service, session_id)
+    await service.answer_question(
+        session_id,
+        _answer(first_question.id, first_question.options[0].id),
+    )
+    second_question = await _wait_for_current_question(
+        service,
+        session_id,
+        previous_question_id=first_question.id,
+    )
+    await service.answer_question(
+        session_id,
+        _answer(second_question.id, second_question.options[0].id),
+    )
     await _collect_sse_until_done(service, session_id)
     snapshot = await service.get_session(session_id)
     await service.close()
@@ -140,11 +154,186 @@ async def test_trip_planning_service_preserves_activity_visual_targets() -> None
     assert snapshot.final_plan is not None
     activities = [item for item in snapshot.final_plan.items if item.type == "activity"]
     assert [item.visual_target.type for item in activities if item.visual_target] == [
-        "aroundPoint",
-        "areaCircle",
+        "exactPoint",
+        "exactPoint",
     ]
     assert activities[1].visual_target is not None
-    assert activities[1].visual_target.radius_meters == 800
+    assert activities[1].visual_target.point == activities[1].location
+
+
+@pytest.mark.asyncio
+async def test_trip_planning_service_asks_for_six_pois_and_expands_selection() -> None:
+    repository = _FakeTripPlanningRepository(
+        poi_candidates=[
+            _poi("Far shop", 48.0, 9.030, 300),
+            _poi("Near shop", 48.0, 9.010, 100),
+            _poi("Middle shop", 48.0, 9.020, 200),
+            _poi("Book shop", 48.001, 9.010, 220),
+            _poi("Gift shop", 48.002, 9.010, 240),
+            _poi("Corner shop", 48.003, 9.010, 260),
+            _poi("Hidden shop", 48.004, 9.010, 280),
+        ]
+    )
+    service = TripPlanningService(
+        repository,
+        _FakeValhallaClient(),
+        _FakeMotisClient(),
+        use_agent=False,
+    )
+
+    session_id = await service.start_session(
+        TripPlanningRequest(
+            draft_id="draft-1",
+            start_location=GeoCoordinate(lat=48.0, lon=9.0, label="Start"),
+            transport_modes=["walk"],
+            steps=[
+                ItineraryStepDraft(
+                    id="step-1",
+                    type="shop",
+                    title="Shopping",
+                    details="books and gifts",
+                    time=TimeConstraint(duration_minutes=60),
+                    location=LocationConstraint(type="wherever"),
+                )
+            ],
+        )
+    )
+
+    question = await _wait_for_current_question(service, session_id)
+    assert question.kind == "selection"
+    assert len(question.options) == 6
+    assert [option.id for option in question.options] == [
+        "poi-1",
+        "poi-2",
+        "poi-3",
+        "poi-4",
+        "poi-5",
+        "poi-6",
+    ]
+    assert question.options[0].title == "Far shop"
+    assert question.options[0].description == "300 m · shop / shop"
+    assert question.options[0].payload == {
+        "id": "poi-1",
+        "title": "Far shop",
+        "description": "300 m · shop / shop",
+        "lat": 48.0,
+        "lon": 9.03,
+        "label": "Far shop",
+        "distanceMeters": 300.0,
+        "primaryFamily": "shop",
+        "primaryType": "shop",
+        "sourceDraftStepId": "step-1",
+    }
+
+    await service.answer_question(
+        session_id,
+        _answer(question.id, ["poi-1", "poi-2", "poi-3"]),
+    )
+    await _collect_sse_until_done(service, session_id)
+    snapshot = await service.get_session(session_id)
+    await service.close()
+
+    assert snapshot.final_plan is not None
+    activities = [item for item in snapshot.final_plan.items if item.type == "activity"]
+    assert [activity.title for activity in activities] == [
+        "Near shop",
+        "Middle shop",
+        "Far shop",
+    ]
+    assert [activity.id for activity in activities] == [
+        "activity-1-1",
+        "activity-1-2",
+        "activity-1-3",
+    ]
+    assert [
+        int((activity.end_time - activity.start_time).total_seconds() / 60)
+        for activity in activities
+        if activity.start_time is not None and activity.end_time is not None
+    ] == [20, 20, 20]
+
+
+@pytest.mark.asyncio
+async def test_answer_question_rejects_empty_selection() -> None:
+    repository = _FakeTripPlanningRepository(
+        poi_candidates=[_poi("Book shop", 48.0, 9.010, 100)]
+    )
+    service = TripPlanningService(
+        repository,
+        _FakeValhallaClient(),
+        _FakeMotisClient(),
+        use_agent=False,
+    )
+
+    session_id = await service.start_session(
+        TripPlanningRequest(
+            draft_id="draft-1",
+            start_location=GeoCoordinate(lat=48.0, lon=9.0),
+            transport_modes=["walk"],
+            steps=[
+                ItineraryStepDraft(
+                    id="step-1",
+                    type="shop",
+                    title="Shopping",
+                    details="books",
+                    time=TimeConstraint(duration_minutes=30),
+                    location=LocationConstraint(type="wherever"),
+                )
+            ],
+        )
+    )
+
+    question = await _wait_for_current_question(service, session_id)
+    with pytest.raises(InvalidAnswerError):
+        await service.answer_question(session_id, _answer(question.id, []))
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_trip_planning_service_falls_back_when_no_pois_are_found() -> None:
+    repository = _FakeTripPlanningRepository(poi_candidates=[])
+    service = TripPlanningService(
+        repository,
+        _FakeValhallaClient(),
+        _FakeMotisClient(),
+        use_agent=False,
+    )
+
+    session_id = await service.start_session(
+        TripPlanningRequest(
+            draft_id="draft-1",
+            start_location=GeoCoordinate(lat=48.0, lon=9.0, label="Start"),
+            transport_modes=["walk"],
+            steps=[
+                ItineraryStepDraft(
+                    id="step-1",
+                    type="shop",
+                    title="Shopping",
+                    details="books",
+                    time=TimeConstraint(duration_minutes=30),
+                    location=LocationConstraint(
+                        type="aroundPoint",
+                        point=GeoCoordinate(lat=48.001, lon=9.001, label="Center"),
+                    ),
+                )
+            ],
+        )
+    )
+
+    await _collect_sse_until_done(service, session_id)
+    snapshot = await service.get_session(session_id)
+    await service.close()
+
+    assert snapshot.final_plan is not None
+    assert snapshot.current_question is None
+    assert [event.payload.type for event in repository.events[session_id]] == [
+        "status",
+        "finalPlan",
+        "done",
+    ]
+    activity = next(
+        item for item in snapshot.final_plan.items if item.type == "activity"
+    )
+    assert activity.location == GeoCoordinate(lat=48.001, lon=9.001, label="Center")
 
 
 @pytest.mark.asyncio
@@ -348,6 +537,75 @@ async def test_trip_planning_service_auto_selects_single_route() -> None:
         "finalPlan",
         "done",
     ]
+
+
+@pytest.mark.asyncio
+async def test_trip_planning_service_caps_provider_route_alternatives() -> None:
+    repository = _FakeTripPlanningRepository()
+    valhalla = _AlternatesValhallaClient()
+    motis = _MultiItineraryMotisClient()
+    service = TripPlanningService(
+        repository,
+        valhalla,
+        motis,
+        use_agent=False,
+    )
+
+    session_id = await service.start_session(
+        TripPlanningRequest(
+            draft_id="draft-1",
+            start_location=GeoCoordinate(lat=48.4, lon=9.99, label="Start"),
+            transport_modes=["walk", "publicTransport"],
+            steps=[
+                ItineraryStepDraft(
+                    id="step-1",
+                    type="eat",
+                    title="Eat",
+                    details="lunch",
+                    time=TimeConstraint(duration_minutes=45),
+                    location=LocationConstraint(
+                        type="exactPoint",
+                        point=GeoCoordinate(lat=48.401, lon=9.991),
+                    ),
+                )
+            ],
+        )
+    )
+
+    question = await _wait_for_current_question(service, session_id)
+    assert question.kind == "routeChoice"
+    assert len(repository.route_candidates) == 8
+    assert len(question.options) == 6
+    assert [option.payload["durationSeconds"] for option in question.options] == [
+        60,
+        120,
+        180,
+        240,
+        300,
+        360,
+    ]
+    assert valhalla.last_route_request is not None
+    assert valhalla.last_route_request.alternates == 3
+    assert motis.last_plan_request is not None
+    assert motis.last_plan_request.num_itineraries == 4
+    assert motis.last_plan_request.num_leg_alternatives == 3
+
+    await service.answer_question(
+        session_id,
+        _answer(question.id, question.options[0].id),
+    )
+    await _collect_sse_until_done(service, session_id)
+    snapshot = await service.get_session(session_id)
+    await service.close()
+
+    assert snapshot.state == "completed"
+    selected = [
+        candidate
+        for candidate in repository.route_candidates.values()
+        if candidate.selected_at is not None
+    ]
+    assert len(selected) == 1
+    assert selected[0].duration_seconds == 60
 
 
 @pytest.mark.asyncio
@@ -931,11 +1189,22 @@ def _answer(question_id: str, value: Any) -> Any:
     return TripPlanningAnswer(question_id=question_id, value=value)
 
 
+def _poi(name: str, lat: float, lon: float, distance_meters: float) -> PoiCandidate:
+    return PoiCandidate(
+        coordinate=GeoCoordinate(lat=lat, lon=lon, label=name),
+        primary_family="shop",
+        primary_type="shop",
+        distance_meters=distance_meters,
+    )
+
+
 class _FakeTripPlanningRepository:
-    def __init__(self) -> None:
+    def __init__(self, poi_candidates: list[PoiCandidate] | None = None) -> None:
         self.sessions: dict[str, dict[str, Any]] = {}
         self.events: dict[str, list[StoredPlanningEvent]] = {}
         self.route_candidates: dict[str, RouteCandidate] = {}
+        self.poi_candidates = poi_candidates
+        self.poi_search_limits: list[int] = []
 
     async def create_session(
         self, session_id: str, request: TripPlanningRequest, now: datetime
@@ -1001,6 +1270,9 @@ class _FakeTripPlanningRepository:
         category_filter: Any,
         limit: int = 5,
     ) -> list[PoiCandidate]:
+        self.poi_search_limits.append(limit)
+        if self.poi_candidates is not None:
+            return self.poi_candidates[:limit]
         return [
             PoiCandidate(
                 coordinate=GeoCoordinate(
@@ -1070,6 +1342,22 @@ class _FakeValhallaClient:
         }
 
 
+class _AlternatesValhallaClient:
+    def __init__(self) -> None:
+        self.last_route_request: Any | None = None
+
+    async def route(self, route_request: Any) -> dict[str, Any]:
+        self.last_route_request = route_request
+        return {
+            "trip": {"summary": {"length": 0.6, "time": 360}, "legs": []},
+            "alternates": [
+                {"trip": {"summary": {"length": 0.2, "time": 120}, "legs": []}},
+                {"trip": {"summary": {"length": 0.4, "time": 240}, "legs": []}},
+                {"trip": {"summary": {"length": 0.8, "time": 480}, "legs": []}},
+            ],
+        }
+
+
 class _FailingValhallaClient:
     async def route(self, route_request: Any) -> dict[str, Any]:
         raise RoutePlanningError("routing failed")
@@ -1136,6 +1424,36 @@ class _RecordingMotisClient(_SegmentedMotisClient):
     async def plan(self, plan_request: Any) -> dict[str, Any]:
         self.last_plan_request = plan_request
         return await super().plan(plan_request)
+
+
+class _MultiItineraryMotisClient:
+    def __init__(self) -> None:
+        self.last_plan_request: Any | None = None
+
+    async def plan(self, plan_request: Any) -> dict[str, Any]:
+        self.last_plan_request = plan_request
+        return {
+            "itineraries": [
+                _motis_itinerary("Bus 1", 60),
+                _motis_itinerary("Bus 2", 180),
+                _motis_itinerary("Bus 3", 300),
+                _motis_itinerary("Bus 4", 420),
+            ]
+        }
+
+
+def _motis_itinerary(display_name: str, duration_seconds: int) -> dict[str, Any]:
+    return {
+        "duration": duration_seconds,
+        "legs": [
+            {
+                "mode": "BUS",
+                "displayName": display_name,
+                "duration": duration_seconds,
+                "distance": duration_seconds * 2,
+            }
+        ],
+    }
 
 
 def _json_model(model: Any) -> dict[str, Any]:

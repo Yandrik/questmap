@@ -436,6 +436,7 @@ def _build_agent() -> Agent[Any, Any]:
         model=model,
         model_settings=settings,
         output_type=TripPlanOutput,
+        retries=5,
         system_prompt="You're a helpful local trip-planning assistant.",
     )
     agent.tool_plain(search_pois)

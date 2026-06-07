@@ -447,6 +447,14 @@ Behavior:
 - The session must be resumable through `GET /trip-planning/sessions/{sessionId}`.
 - The backend owns route computation inside generated trip plans, including
   public transport legs.
+- In `deterministic` mode, non-exact POI-backed steps may emit a `selection`
+  question with up to 6 closest matching places. The accepted answer is a
+  non-empty list of selected option ids. Selected places become concrete plan
+  stops, ordered greedily from the current route cursor, and the draft step's
+  duration is split across them.
+- In `deterministic` mode, route decisions may emit a `routeChoice` question
+  with mode alternatives and provider-returned alternatives. Route options are
+  capped at the 6 fastest candidates.
 
 ### `GET /trip-planning/sessions/{sessionId}/events`
 
@@ -559,6 +567,7 @@ Question value expectations:
 - `text`: string.
 - `selection`: option id string, or an object if the backend explicitly defines a
   richer option payload.
+- Deterministic POI `selection`: non-empty list of selected option ids.
 - `routeChoice`: selected route/option id string, or a route-choice object if
   specified in the question payload.
 
