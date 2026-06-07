@@ -403,6 +403,7 @@ Request:
 ```json
 {
   "draftId": "draft-1",
+  "plannerMode": "agent",
   "startLocation": { "lat": 48.401, "lon": 9.99, "label": "Current location" },
   "endLocation": { "lat": 48.42, "lon": 10.01, "label": "Hotel" },
   "transportModes": ["walk", "publicTransport"],
@@ -428,6 +429,9 @@ Required fields:
 
 Optional fields:
 
+- `plannerMode`, either `agent` or `deterministic`; defaults to `agent`.
+  If the backend is started with `NO_AGENT=true`, agent requests fall back to
+  deterministic planning.
 - `endLocation`
 
 Response:

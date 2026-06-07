@@ -262,8 +262,10 @@ async def create_trip_planning_session(
     body: TripPlanningRequest, request: Request
 ) -> TripPlanningStartResponse:
     logger.info(
-        "Create trip-planning session request draft_id=%s steps=%s modes=%s",
+        "Create trip-planning session request draft_id=%s planner_mode=%s "
+        "steps=%s modes=%s",
         body.draft_id,
+        body.planner_mode,
         len(body.steps),
         body.transport_modes,
     )

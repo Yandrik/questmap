@@ -1,11 +1,13 @@
 import '../../../_shared/models/geo_coordinate.dart';
 import '../../../_shared/models/transport_mode.dart';
 import 'itinerary_step_draft.dart';
+import 'trip_planner_mode.dart';
 
 class TripDraft {
   const TripDraft({
     required this.id,
     required this.startLocation,
+    this.plannerMode = TripPlannerMode.agent,
     required this.transportModes,
     required this.steps,
     this.endLocation,
@@ -19,6 +21,7 @@ class TripDraft {
     return TripDraft(
       id: id,
       startLocation: startLocation,
+      plannerMode: TripPlannerMode.agent,
       transportModes: const {TransportMode.walk, TransportMode.publicTransport},
       steps: const [],
       updatedAt: DateTime.now().toUtc(),
@@ -31,6 +34,9 @@ class TripDraft {
     return TripDraft(
       id: json['id'] as String,
       startLocation: GeoCoordinate.fromJson(_map(json['startLocation'])),
+      plannerMode: json['plannerMode'] is String
+          ? TripPlannerMode.fromApiValue(json['plannerMode'] as String)
+          : TripPlannerMode.agent,
       endLocation: json['endLocation'] == null
           ? null
           : GeoCoordinate.fromJson(_map(json['endLocation'])),
@@ -52,6 +58,7 @@ class TripDraft {
 
   final String id;
   final GeoCoordinate startLocation;
+  final TripPlannerMode plannerMode;
   final GeoCoordinate? endLocation;
   final Set<TransportMode> transportModes;
   final List<ItineraryStepDraft> steps;
@@ -60,6 +67,7 @@ class TripDraft {
   Map<String, Object?> toJson() => {
     'id': id,
     'startLocation': startLocation.toJson(),
+    'plannerMode': plannerMode.apiValue,
     if (endLocation != null) 'endLocation': endLocation!.toJson(),
     'transportModes': transportModes.map((mode) => mode.apiValue).toList(),
     'steps': steps.map((step) => step.toJson()).toList(),
@@ -68,6 +76,7 @@ class TripDraft {
 
   TripDraft copyWith({
     GeoCoordinate? startLocation,
+    TripPlannerMode? plannerMode,
     GeoCoordinate? endLocation,
     Set<TransportMode>? transportModes,
     List<ItineraryStepDraft>? steps,
@@ -77,6 +86,7 @@ class TripDraft {
     return TripDraft(
       id: id,
       startLocation: startLocation ?? this.startLocation,
+      plannerMode: plannerMode ?? this.plannerMode,
       endLocation: clearEndLocation ? null : endLocation ?? this.endLocation,
       transportModes: transportModes ?? this.transportModes,
       steps: steps ?? this.steps,

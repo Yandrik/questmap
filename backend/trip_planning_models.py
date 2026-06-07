@@ -18,6 +18,7 @@ _api_config_allow_extra = ConfigDict(
 )
 
 TransportMode = Literal["walk", "bike", "drive", "publicTransport"]
+TripPlannerMode = Literal["agent", "deterministic"]
 ItineraryStepType = Literal[
     "shop",
     "eat",
@@ -178,6 +179,7 @@ class TripPlanningRequest(BaseModel):
     model_config = _api_config
 
     draft_id: str
+    planner_mode: TripPlannerMode = "agent"
     start_location: GeoCoordinate
     end_location: GeoCoordinate | None = None
     transport_modes: list[TransportMode] = Field(..., min_length=1)

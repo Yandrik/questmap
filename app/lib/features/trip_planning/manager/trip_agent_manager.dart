@@ -52,6 +52,7 @@ class TripAgentManager extends ChangeNotifier {
     try {
       final request = TripPlanningRequest(
         draftId: draft.id,
+        plannerMode: draft.plannerMode,
         startLocation: draft.startLocation,
         endLocation: draft.endLocation,
         transportModes: draft.transportModes.toList(),

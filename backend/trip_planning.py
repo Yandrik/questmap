@@ -176,9 +176,10 @@ class SurrealTripPlanningRepository:
     ) -> TripPlanningSessionSnapshot:
         logger.info(
             "Creating trip-planning session session_id=%s draft_id=%s "
-            "steps=%s modes=%s",
+            "planner_mode=%s steps=%s modes=%s",
             session_id,
             request.draft_id,
+            request.planner_mode,
             len(request.steps),
             request.transport_modes,
         )
@@ -349,9 +350,7 @@ class SurrealTripPlanningRepository:
         )
         return candidates
 
-    async def create_route_candidate(
-        self, candidate: RouteCandidate
-    ) -> RouteCandidate:
+    async def create_route_candidate(self, candidate: RouteCandidate) -> RouteCandidate:
         record = _route_candidate_record(candidate)
         await self._db.create(_route_candidate_record_id(candidate.id), record)
         logger.info(
@@ -443,8 +442,7 @@ class TripPlanningEventBus:
             if subscribers is not None:
                 subscribers.discard(queue)
                 logger.info(
-                    "Trip-planning SSE subscriber removed session_id=%s "
-                    "subscribers=%s",
+                    "Trip-planning SSE subscriber removed session_id=%s subscribers=%s",
                     session_id,
                     len(subscribers),
                 )
@@ -483,16 +481,23 @@ class TripPlanningService:
             motis,
             self.ask_user,
         )
-        if planner is not None:
-            self._planner = planner
-        elif _use_agent_planner(use_agent):
-            self._planner = AgentTripPlanner(
+        self._override_planner = planner
+        self._deterministic_planner = TripPlanner(repository, route_candidates)
+        self._agent_planner = (
+            AgentTripPlanner(
                 repository,
                 self.ask_user,
                 route_candidates,
             )
+            if _use_agent_planner(use_agent)
+            else None
+        )
+        if planner is not None:
+            self._planner = planner
+        elif self._agent_planner is not None:
+            self._planner = self._agent_planner
         else:
-            self._planner = TripPlanner(repository, route_candidates)
+            self._planner = self._deterministic_planner
         logger.info(
             "Trip-planning service initialized planner=%s",
             type(self._planner).__name__,
@@ -757,7 +762,9 @@ class TripPlanningService:
             )
             await self._raise_if_cancelled(session_id)
 
-            plan = await self._planner.build_plan(session_id)
+            session = await self._repository.get_session(session_id)
+            planner = self._planner_for_request(session.request)
+            plan = await planner.build_plan(session_id)
             logger.info(
                 "Trip-planning plan built session_id=%s items=%s",
                 session_id,
@@ -822,6 +829,20 @@ class TripPlanningService:
                 session_id,
                 TripPlanningEventPayload(type="done", message="done"),
             )
+
+    def _planner_for_request(self, request: TripPlanningRequest) -> PlanningEngine:
+        if self._override_planner is not None:
+            return self._override_planner
+        if request.planner_mode == "deterministic":
+            return self._deterministic_planner
+        if self._agent_planner is None:
+            logger.warning(
+                "Agent planner requested but disabled; falling back to deterministic "
+                "planner draft_id=%s",
+                request.draft_id,
+            )
+            return self._deterministic_planner
+        return self._agent_planner
 
     async def _emit(
         self, session_id: str, payload: TripPlanningEventPayload
@@ -1013,9 +1034,7 @@ class TripRouteCandidateService:
             current_time += timedelta(seconds=selected.duration_seconds)
         return summaries
 
-    async def get_candidate(
-        self, session_id: str, candidate_id: str
-    ) -> RouteCandidate:
+    async def get_candidate(self, session_id: str, candidate_id: str) -> RouteCandidate:
         return await self._repository.get_route_candidate(session_id, candidate_id)
 
     async def _route_with_valhalla(
@@ -1350,6 +1369,7 @@ class TripPlanner:
             _coord_log(center),
         )
         return _with_default_label(center, step.title)
+
 
 class AgentTripPlanner:
     def __init__(

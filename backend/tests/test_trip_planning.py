@@ -343,9 +343,11 @@ async def test_trip_planning_service_auto_selects_single_route() -> None:
     assert len(repository.route_candidates) == 1
     candidate = next(iter(repository.route_candidates.values()))
     assert candidate.selected_at is not None
-    assert [
-        event.payload.type for event in repository.events[session_id]
-    ] == ["status", "finalPlan", "done"]
+    assert [event.payload.type for event in repository.events[session_id]] == [
+        "status",
+        "finalPlan",
+        "done",
+    ]
 
 
 @pytest.mark.asyncio
@@ -538,6 +540,21 @@ async def test_trip_planning_service_uses_agent_unless_no_agent_is_true(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = _FakeTripPlanningRepository()
+    request = TripPlanningRequest(
+        draft_id="draft-1",
+        start_location=GeoCoordinate(lat=48.4, lon=9.99),
+        transport_modes=["walk"],
+        steps=[
+            ItineraryStepDraft(
+                id="step-1",
+                type="eat",
+                title="Eat",
+                details="lunch",
+                time=TimeConstraint(duration_minutes=30),
+                location=LocationConstraint(type="wherever"),
+            )
+        ],
+    )
     monkeypatch.delenv("NO_AGENT", raising=False)
 
     service = TripPlanningService(
@@ -546,6 +563,13 @@ async def test_trip_planning_service_uses_agent_unless_no_agent_is_true(
         _FakeMotisClient(),
     )
     assert isinstance(service._planner, AgentTripPlanner)
+    assert isinstance(service._planner_for_request(request), AgentTripPlanner)
+    assert isinstance(
+        service._planner_for_request(
+            request.model_copy(update={"planner_mode": "deterministic"})
+        ),
+        TripPlanner,
+    )
     await service.close()
 
     monkeypatch.setenv("NO_AGENT", "true")
@@ -555,6 +579,7 @@ async def test_trip_planning_service_uses_agent_unless_no_agent_is_true(
         _FakeMotisClient(),
     )
     assert isinstance(service._planner, TripPlanner)
+    assert isinstance(service._planner_for_request(request), TripPlanner)
     await service.close()
 
 
@@ -647,6 +672,47 @@ async def test_agent_trip_planner_converts_agent_output_to_trip_plan(
     )
     assert plan.items[1].visual_target is not None
     assert plan.items[1].visual_target.type == "exactPoint"
+
+
+def test_trip_planning_request_serializes_planner_mode() -> None:
+    request = TripPlanningRequest(
+        draft_id="draft-1",
+        planner_mode="deterministic",
+        start_location=GeoCoordinate(lat=48.4, lon=9.99),
+        transport_modes=["walk"],
+        steps=[
+            ItineraryStepDraft(
+                id="step-1",
+                type="eat",
+                title="Eat",
+                details="lunch",
+                time=TimeConstraint(duration_minutes=30),
+                location=LocationConstraint(type="wherever"),
+            )
+        ],
+    )
+
+    assert request.model_dump(by_alias=True)["plannerMode"] == "deterministic"
+    assert (
+        TripPlanningRequest.model_validate(
+            {
+                "draftId": "draft-1",
+                "plannerMode": "agent",
+                "startLocation": {"lat": 48.4, "lon": 9.99},
+                "transportModes": ["walk"],
+                "steps": [
+                    {
+                        "id": "step-1",
+                        "type": "eat",
+                        "title": "Eat",
+                        "time": {"durationMinutes": 30},
+                        "location": {"type": "wherever"},
+                    }
+                ],
+            }
+        ).planner_mode
+        == "agent"
+    )
 
 
 @pytest.mark.asyncio
@@ -945,9 +1011,7 @@ class _FakeTripPlanningRepository:
             )
         ]
 
-    async def create_route_candidate(
-        self, candidate: RouteCandidate
-    ) -> RouteCandidate:
+    async def create_route_candidate(self, candidate: RouteCandidate) -> RouteCandidate:
         self.route_candidates[candidate.id] = candidate
         return candidate
 

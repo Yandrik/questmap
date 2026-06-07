@@ -18,6 +18,7 @@ import 'package:meander/features/trip_planning/model/itinerary_step_draft.dart';
 import 'package:meander/features/trip_planning/model/location_constraint.dart';
 import 'package:meander/features/trip_planning/model/pending_trip_location_pick.dart';
 import 'package:meander/features/trip_planning/model/trip_plan.dart';
+import 'package:meander/features/trip_planning/model/trip_planner_mode.dart';
 import 'package:meander/features/trip_planning/model/trip_planning_session.dart';
 import 'package:meander/features/trip_planning/services/trip_planning_api_service.dart';
 import 'package:meander/features/trip_planning/widgets/trip_composer_panel.dart';
@@ -270,7 +271,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Exact location'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Pick on map'));
+    await tester.tap(find.text('Pick where'));
     await tester.pumpAndSettle();
 
     final pending = di<TripDraftManager>().pendingLocationPick;
@@ -288,7 +289,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Area'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Pick on map'));
+    await tester.tap(find.text('Pick where'));
     await tester.pumpAndSettle();
 
     final pending = di<TripDraftManager>().pendingLocationPick;
@@ -310,7 +311,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Around here'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Use selected target'));
+    await tester.tap(find.text('Selected'));
     await tester.pumpAndSettle();
 
     final step = di<TripDraftManager>().draft!.steps.single;
@@ -338,7 +339,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Exact'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Use selected target'));
+    await tester.tap(find.text('Selected'));
     await tester.pumpAndSettle();
 
     final step = di<TripDraftManager>().draft!.steps.single;
@@ -374,6 +375,30 @@ void main() {
 
     expect(di<TripPlanManager>().currentPlan, isNull);
     expect(find.text('Add activity'), findsOneWidget);
+  });
+
+  testWidgets('selects planner mode and sends it with planning request', (
+    tester,
+  ) async {
+    final manager = di<TripDraftManager>();
+    manager.addStep(
+      type: ItineraryStepType.shop,
+      details: 'books',
+      location: LocationConstraint.wherever(),
+    );
+
+    await _pumpPanel(tester);
+
+    await tester.tap(find.text('Deterministic'));
+    await tester.pumpAndSettle();
+
+    expect(manager.draft!.plannerMode, TripPlannerMode.deterministic);
+
+    await tester.tap(find.text('Plan trip'));
+    await tester.pump();
+
+    final api = di<TripPlanningApiService>() as _FakeTripPlanningApiService;
+    expect(api.lastRequest!.plannerMode, TripPlannerMode.deterministic);
   });
 
   testWidgets('surfaces planning error returned by backend', (tester) async {
@@ -460,9 +485,13 @@ class _FakeTripPlanningApiService extends TripPlanningApiService {
   _FakeTripPlanningApiService() : super(ApiClient(baseUrl: 'http://api.test'));
 
   final _controller = StreamController<TripPlanningEvent>.broadcast();
+  TripPlanningRequest? lastRequest;
 
   @override
-  Future<String> startSession(TripPlanningRequest request) async => 'session-1';
+  Future<String> startSession(TripPlanningRequest request) async {
+    lastRequest = request;
+    return 'session-1';
+  }
 
   @override
   Stream<TripPlanningEvent> watchEvents(String sessionId) => _controller.stream;

@@ -6,6 +6,7 @@ import 'package:meander/features/trip_planning/manager/trip_draft_manager.dart';
 import 'package:meander/features/trip_planning/model/itinerary_step_draft.dart';
 import 'package:meander/features/trip_planning/model/location_constraint.dart';
 import 'package:meander/features/trip_planning/model/pending_trip_location_pick.dart';
+import 'package:meander/features/trip_planning/model/trip_planner_mode.dart';
 
 void main() {
   late LocalPersistenceService persistence;
@@ -21,6 +22,7 @@ void main() {
     );
 
     manager.toggleTransportMode(TransportMode.bike);
+    manager.setPlannerMode(TripPlannerMode.deterministic);
     manager.addStep(
       type: ItineraryStepType.shop,
       details: 'clothes',
@@ -30,6 +32,7 @@ void main() {
     await manager.saveNow();
 
     expect(manager.draft!.transportModes, contains(TransportMode.bike));
+    expect(manager.draft!.plannerMode, TripPlannerMode.deterministic);
     expect(manager.draft!.steps.single.details, 'clothes');
 
     final restored = TripDraftManager(persistence);
@@ -38,6 +41,7 @@ void main() {
     );
 
     expect(restored.draft!.startLocation.lat, 48.4);
+    expect(restored.draft!.plannerMode, TripPlannerMode.deterministic);
     expect(restored.draft!.steps.single.type, ItineraryStepType.shop);
     expect(restored.draft!.steps.single.time.durationMinutes, 90);
   });

@@ -14,6 +14,7 @@ import '../model/location_constraint.dart';
 import '../model/pending_trip_location_pick.dart';
 import '../model/trip_plan.dart';
 import '../model/trip_draft.dart';
+import '../model/trip_planner_mode.dart';
 
 class TripComposerPanel extends WatchingWidget {
   const TripComposerPanel({
@@ -163,6 +164,12 @@ class TripComposerPanel extends WatchingWidget {
                           onDismiss: agentManager.clearError,
                         ),
                       ],
+                      const SizedBox(height: 10),
+                      _PlannerModeSelector(
+                        draft: draft,
+                        enabled: !agentManager.isPlanning,
+                      ),
+                      const SizedBox(height: 10),
                       Row(
                         children: [
                           Expanded(
@@ -567,6 +574,40 @@ class _TransportModeSelector extends StatelessWidget {
   }
 }
 
+class _PlannerModeSelector extends StatelessWidget {
+  const _PlannerModeSelector({required this.draft, required this.enabled});
+
+  final TripDraft draft;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: SegmentedButton<TripPlannerMode>(
+        showSelectedIcon: false,
+        segments: const [
+          ButtonSegment(
+            value: TripPlannerMode.agent,
+            icon: Icon(Icons.auto_awesome),
+            label: Text('Agent'),
+          ),
+          ButtonSegment(
+            value: TripPlannerMode.deterministic,
+            icon: Icon(Icons.account_tree_outlined),
+            label: Text('Deterministic'),
+          ),
+        ],
+        selected: {draft.plannerMode},
+        onSelectionChanged: enabled
+            ? (selection) =>
+                  di<TripDraftManager>().setPlannerMode(selection.single)
+            : null,
+      ),
+    );
+  }
+}
+
 class _TripLocationInput extends StatelessWidget {
   const _TripLocationInput({
     required this.label,
@@ -797,22 +838,6 @@ class _StartTimeButton extends StatelessWidget {
     );
   }
 }
-
-const _activityDurationOptions = [
-  5,
-  10,
-  15,
-  20,
-  25,
-  30,
-  45,
-  60,
-  90,
-  120,
-  150,
-  180,
-  240,
-];
 
 class _DurationMenu extends StatelessWidget {
   const _DurationMenu({required this.step});

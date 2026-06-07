@@ -10,6 +10,7 @@ import '../model/location_constraint.dart';
 import '../model/pending_trip_location_pick.dart';
 import '../model/time_constraint.dart';
 import '../model/trip_draft.dart';
+import '../model/trip_planner_mode.dart';
 
 class TripDraftManager extends ChangeNotifier {
   TripDraftManager(this._persistenceService);
@@ -60,6 +61,16 @@ class TripDraftManager extends ChangeNotifier {
     _draft = draft.copyWith(
       endLocation: location,
       clearEndLocation: location == null,
+      updatedAt: DateTime.now().toUtc(),
+    );
+    _changed();
+  }
+
+  void setPlannerMode(TripPlannerMode mode) {
+    final draft = _requireDraft();
+    if (draft.plannerMode == mode) return;
+    _draft = draft.copyWith(
+      plannerMode: mode,
       updatedAt: DateTime.now().toUtc(),
     );
     _changed();

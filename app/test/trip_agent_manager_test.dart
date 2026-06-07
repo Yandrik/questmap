@@ -12,6 +12,7 @@ import 'package:meander/features/trip_planning/model/location_constraint.dart';
 import 'package:meander/features/trip_planning/model/time_constraint.dart';
 import 'package:meander/features/trip_planning/model/trip_draft.dart';
 import 'package:meander/features/trip_planning/model/trip_plan.dart';
+import 'package:meander/features/trip_planning/model/trip_planner_mode.dart';
 import 'package:meander/features/trip_planning/model/trip_planning_session.dart';
 import 'package:meander/features/trip_planning/services/trip_planning_api_service.dart';
 
@@ -40,6 +41,7 @@ void main() {
           id: 'draft-1',
           startLocation: const GeoCoordinate(lat: 48.4, lon: 9.99),
         ).copyWith(
+          plannerMode: TripPlannerMode.deterministic,
           transportModes: const {TransportMode.walk},
           steps: [
             ItineraryStepDraft.create(
@@ -54,6 +56,7 @@ void main() {
 
     await agentManager.startPlanning(draft);
     expect(agentManager.isPlanning, isTrue);
+    expect(api.lastRequest!.plannerMode, TripPlannerMode.deterministic);
     expect(api.lastRequest!.steps.single.details, 'Chinese');
 
     api.emit(

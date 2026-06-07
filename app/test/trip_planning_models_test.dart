@@ -7,6 +7,7 @@ import 'package:meander/features/trip_planning/model/location_constraint.dart';
 import 'package:meander/features/trip_planning/model/pending_trip_location_pick.dart';
 import 'package:meander/features/trip_planning/model/time_constraint.dart';
 import 'package:meander/features/trip_planning/model/trip_plan.dart';
+import 'package:meander/features/trip_planning/model/trip_planner_mode.dart';
 import 'package:meander/features/trip_planning/model/trip_planning_session.dart';
 
 void main() {
@@ -61,6 +62,7 @@ void main() {
     expect(startTime.isAfter(after), isFalse);
     expect(json, {
       'draftId': 'draft-1',
+      'plannerMode': 'agent',
       'startLocation': {'lat': 48.4, 'lon': 9.99},
       'transportModes': ['walk', 'publicTransport'],
       'steps': [
@@ -104,6 +106,26 @@ void main() {
     final firstTime = firstStep['time'] as Map<String, Object?>;
 
     expect(firstTime['startTime'], explicitStart.toIso8601String());
+  });
+
+  test('serializes deterministic trip planner mode', () {
+    final request = TripPlanningRequest(
+      draftId: 'draft-1',
+      plannerMode: TripPlannerMode.deterministic,
+      startLocation: const GeoCoordinate(lat: 48.4, lon: 9.99),
+      transportModes: const [TransportMode.walk],
+      steps: [
+        ItineraryStepDraft.create(
+          id: 'step-1',
+          type: ItineraryStepType.eat,
+          details: 'lunch',
+          time: const TimeConstraint(durationMinutes: 45),
+          location: LocationConstraint.wherever(),
+        ),
+      ],
+    );
+
+    expect(request.toJson()['plannerMode'], 'deterministic');
   });
 
   test('parses old and extended trip plans', () {

@@ -3,10 +3,12 @@ import '../../../_shared/models/transport_mode.dart';
 import '../../../_shared/services/api_client.dart';
 import 'itinerary_step_draft.dart';
 import 'trip_plan.dart';
+import 'trip_planner_mode.dart';
 
 class TripPlanningRequest {
   const TripPlanningRequest({
     required this.draftId,
+    this.plannerMode = TripPlannerMode.agent,
     required this.startLocation,
     required this.transportModes,
     required this.steps,
@@ -14,6 +16,7 @@ class TripPlanningRequest {
   });
 
   final String draftId;
+  final TripPlannerMode plannerMode;
   final GeoCoordinate startLocation;
   final GeoCoordinate? endLocation;
   final List<TransportMode> transportModes;
@@ -21,6 +24,7 @@ class TripPlanningRequest {
 
   Map<String, Object?> toJson() => {
     'draftId': draftId,
+    'plannerMode': plannerMode.apiValue,
     'startLocation': startLocation.toJson(),
     if (endLocation != null) 'endLocation': endLocation!.toJson(),
     'transportModes': transportModes.map((mode) => mode.apiValue).toList(),
