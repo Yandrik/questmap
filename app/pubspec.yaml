@@ -36,8 +36,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_svg: ^2.3.0
   iconify_flutter: ^0.0.7
-  maplibre_gl:
-    path: /home/yannik/Documents/Codex/2026-06-05/maplibre-flutter-maplibre-gl-git-https/maplibre_gl
+  maplibre_gl: ^0.26.1
   permission_handler: ^12.0.3
   dio: ^5.9.2
   get_it: ^9.2.1
@@ -48,12 +47,6 @@ dependencies:
   sqlite3_flutter_libs: ^0.6.0+eol
   path_provider: ^2.1.5
   path: ^1.9.1
-
-dependency_overrides:
-  maplibre_gl_platform_interface:
-    path: /home/yannik/Documents/Codex/2026-06-05/maplibre-flutter-maplibre-gl-git-https/maplibre_gl_platform_interface
-  maplibre_gl_web:
-    path: /home/yannik/Documents/Codex/2026-06-05/maplibre-flutter-maplibre-gl-git-https/maplibre_gl_web
 
 dev_dependencies:
   flutter_test:
