@@ -5,10 +5,11 @@ import json
 from dataclasses import dataclass
 from os import getenv
 from typing import Any, Literal
+from dotenv import load_dotenv
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_ai import Agent, BinaryContent
-from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 from surrealdb import AsyncSurreal
 
@@ -28,7 +29,7 @@ class LocationGeometry(BaseModel):
 
 
 class LocationProperties(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="allow")
+    #model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     osm_type: str | None = None
     osm_id: int | None = None
@@ -58,7 +59,7 @@ class LocationsObject(BaseModel):
     geometry: LocationGeometry
     properties: LocationProperties
 
-    def to_locations_of_interest(self) -> TripLocations:
+    '''def to_locations_of_interest(self) -> TripLocations:
         return TripLocations(
             city=(self.properties.address.city if self.properties.address else None)
             or self.properties.name
@@ -66,7 +67,7 @@ class LocationsObject(BaseModel):
             lat=self.geometry.coordinates[1],
             lon=self.geometry.coordinates[0],
             category="other",
-        )
+        )'''
 
 
 class TripPlanInput(BaseModel):
@@ -76,17 +77,19 @@ class TripPlanInput(BaseModel):
     max_stops: int = 30
     radius_meters: int = 5000
 
-    @field_validator("trip_locations", mode="before")
+    '''@field_validator("trip_locations", mode="before")
     @classmethod
     def _normalize_geojson_feature(cls, value: Any) -> Any:
         if isinstance(value, dict) and value.get("type") == "Feature":
             return [LocationsObject.model_validate(value).to_locations_of_interest()]
-        return value
+        return value'''
 
 
 class TripPlanOutput(BaseModel):
     summary: str
-    ordered_points: list[LocationsObject]
+    start_point: tuple[float, float]
+    end_point: tuple[float, float]
+    ordered_points: list[list[LocationsObject] | LocationsObject]
     route_strategy: str
     warnings: list[str] = Field(default_factory=list)
 
@@ -123,10 +126,11 @@ async def search_pois(
     serializable_result = _jsonable(result)
     filtered_result = [
         {
-            "id": item.get("id"),
+            "osm_id": item.get("osm_id"),
             "name": item.get("name"),
             "lat": item.get("lat"),
             "lon": item.get("lon"),
+            "distance_m": item.get("distance_m"),
             "family": item.get("primary_family"),
             "category": item.get("primary_type")
             or (item.get("tags") or {}).get("category"),
@@ -134,12 +138,44 @@ async def search_pois(
         for item in serializable_result
         if isinstance(item, dict)
     ]
+    #print(f"search_pois result: {filtered_result}")
+    return json.dumps(filtered_result, ensure_ascii=False)
+
+async def search_closest_city(
+    lat: float,
+    lon: float,
+) -> str:
+    """Search SurrealDB for nearby points of interest around a coordinate."""
+    db_url = getenv("SURREALDB_URL", "ws://localhost:8001")
+    db_ns = getenv("SURREALDB_NAMESPACE", "main")
+    db_name = getenv("SURREALDB_DATABASE", "main")
+    db_user = getenv("SURREALDB_USERNAME", "root")
+    db_pass = getenv("SURREALDB_PASSWORD", "root")
+
+    async with AsyncSurreal(db_url) as db:
+        await db.signin({"username": db_user, "password": db_pass})
+        await db.use(db_ns, db_name)
+        query, variables = _closest_city_query(lat, lon)
+        result = await db.query(query, variables)
+
+    serializable_result = _jsonable(result)
+    filtered_result = [
+        {
+            "lat": item.get("lat"),
+            "lon": item.get("lon"),
+            "city": item.get("address", {}).get("city", None),
+        }
+        for item in serializable_result
+        if isinstance(item, dict)
+    ]
+    #print(f"search_pois result: {filtered_result}")
     return json.dumps(filtered_result, ensure_ascii=False)
 
 
 async def prompt_user(message: str) -> str:
     """Non-blocking placeholder for agent clarification prompts."""
-    return f"Question deferred to API workflow: {message}"
+    print(f"Prompting user: {message}")
+    return f"Question deferred to API workflow: {message}\nJust use the first object in the list of suggestions as the answer to the question."
 
 
 async def plan_trip(inp: TripPlanInput) -> TripPlanOutput:
@@ -149,12 +185,12 @@ async def plan_trip(inp: TripPlanInput) -> TripPlanOutput:
         prompt,
         deps=Deps(
             db_url=getenv("SURREALDB_URL", "ws://localhost:8001"),
-            db_ns=getenv("SURREALDB_NAMESPACE", "questmap"),
-            db_name=getenv("SURREALDB_DATABASE", "questmap"),
+            db_ns=getenv("SURREALDB_NAMESPACE", "main"),
+            db_name=getenv("SURREALDB_DATABASE", "main"),
             db_user=getenv("SURREALDB_USERNAME", "root"),
             db_pass=getenv("SURREALDB_PASSWORD", "root"),
         ),
-        model_settings={"temperature": 0.2},
+        #model_settings={"temperature": 0.2},
     )
     return TripPlanOutput.model_validate(result.output)
 
@@ -168,12 +204,18 @@ def _build_agent() -> Agent[Any, Any]:
         model_name=model_name,
         provider=OpenAIProvider(base_url=base_url),
     )
+    settings = OpenAIResponsesModelSettings(
+        openai_reasoning_effort="low",
+        openai_reasoning_summary='concise',
+    )
     agent: Agent[Any, Any] = Agent(
         model=model,
+        model_settings=settings,
         output_type=TripPlanOutput,
         system_prompt="You're a helpful local trip-planning assistant.",
     )
     agent.tool_plain(search_pois)
+    #agent.tool_plain(search_closest_city)
     agent.tool_plain(prompt_user)
     return agent
 
@@ -188,10 +230,41 @@ Trip Locations: {inp.trip_locations}
 Max stops: {inp.max_stops}
 Radius: {inp.radius_meters} meters
 
-For each trip location, use search_pois once to find nearby candidate POIs.
-Choose one point per requested location when possible. Prefer points that match
-the requested category and make a reasonable route from start to end. Return
-only structured output in the required schema.
+You are a capable trip planer that want to help people to plan a trip through a city.
+The people count on you and you should do exactly that what is prompet so you can fulfill your task as best as you can.
+
+As an input you get an object with a few variables.
+The first variable is the starting_point, and marks the location where the people currently are. The points are given in the format (lat, long).
+The second variable is the end_point, and it marks the final destination of the group.
+
+You are also given a time frame, in which you have to work with, to get all things done that the people want to do. If the people spend to much time or too little
+time with their activity, politely inform them about this and give alternative solution.
+
+The most important part are the trip_locations. This is an ordered list of all things the people want to do in the time frame. The order of the trip locations are
+very important and should be considered the same when creating the output.
+
+Each Trip Locations object has a city, latitude and longitude of the central point, which with the radius_meters from the TripPlanInput object form an area, in
+which the activities for each trip location should be contained. Next to that a catrgory variable is also used to filter for the correct activities. All objects,
+that fit in the criteria are automatically filtered in the search query to the data base, so you don't have to worry about that.
+
+Your job is now to chose the best locationsObjects that the query gave back. These should fit as best as you can to the notes provided. If no notes are provided
+then prompt the user, what his preferences are. For the category restaurant these can be certain food types like "pizza" or "fried rice". For shopping this can be
+something like "shoes" or "sports gear" or "food". Be creative about your suggestions as the people will like creative and thoughtful suggestions.
+IT IS VERY IMPORTANT THAT EVERY SUGGESTION ALSO EXISTS IN THE QUERY RESULT!!!!!!
+
+If their preferences are clear you can give them a selection of 3 to 6 items to choose from, that you think fits best to their trip. The people can then decide
+for one or more locations they want to visit. Also give them the option to search a specific name.
+
+If the people choose more than one location put the locationsObject objects inside a list.
+
+All the information you get from the query about the locations should be used to fill the properties of the locationsObject, so that the people get a good overview
+about the location and can make a good decision.
+
+Repeat this for each Trip location object in the list and create list with all locationsObjects and lists of locationsObjects. It is important to follow
+
+If you are unsure about something prompt the user with some suggestions.
+
+You are a good trip planer and you got this :)
 """
     first_location = next(iter(inp.trip_locations), None)
     if first_location and first_location.heatmap_image_b64:
@@ -228,7 +301,7 @@ def _poi_query(
         <point>[<float>$lon, <float>$lat]
       ) < <float>$radius
     ORDER BY distance_m ASC
-    LIMIT 20;
+    LIMIT 40;
     """
     return (
         query,
@@ -241,6 +314,24 @@ def _poi_query(
         },
     )
 
+
+def _closest_city_query(lat: float, lon: float) -> tuple[str, dict[str, Any]]:
+    query = """
+    SELECT name, lat, lon, address.city,
+      geo::distance(location, <point>[<float>$lon, <float>$lat]) AS distance_m
+    FROM osm_object
+    WHERE location != NONE
+    AND address.city != None
+    ORDER BY distance_m ASC
+    LIMIT 1;
+    """
+    return (
+        query,
+        {
+            "lat": lat,
+            "lon": lon,
+        },
+    )
 
 def _jsonable(value: Any) -> Any:
     if value is None or isinstance(value, str | int | float | bool):
@@ -257,6 +348,7 @@ def _jsonable(value: Any) -> Any:
 if __name__ == "__main__":
     import asyncio
 
+    load_dotenv()  # Load environment variables from .env file
     sample_input = TripPlanInput(
         start_point=(48.398678, 9.983708),
         end_point=(48.398678, 9.983708),
@@ -266,11 +358,39 @@ if __name__ == "__main__":
                 lat=48.400833,
                 lon=9.987222,
                 category="restaurant",
-                notes="Pizzeria",
+                notes="Fried Rices and Noodles, preferably with a vegan option",
+            ),
+            TripLocations(
+                city="Ulm",
+                lat=48.400833,
+                lon=9.987222,
+                category="shop",
+                notes="Cloths",
+            ),
+            TripLocations(
+                city="Ulm",
+                lat=48.400833,
+                lon=9.987222,
+                category="sightseeing",
+                notes="Ulmer Münster",
+            ),
+            TripLocations(
+                city="Ulm",
+                lat=48.400833,
+                lon=9.987222,
+                category="restaurant",
+                notes="Ice cream",
+            ),
+            TripLocations(
+                city="Ulm",
+                lat=48.400833,
+                lon=9.987222,
+                category="sightseeing",
+                notes="Spaceport",
             )
         ],
         max_stops=5,
-        radius_meters=4000,
+        radius_meters=8000,
     )
 
     print(asyncio.run(plan_trip(sample_input)))
