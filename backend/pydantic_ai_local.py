@@ -91,6 +91,7 @@ class TripPlanOutput(BaseModel):
     end_point: tuple[float, float]
     ordered_points: list[list[LocationsObject] | LocationsObject]
     route_strategy: str
+    notes: str | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -172,9 +173,11 @@ async def search_closest_city(
     return json.dumps(filtered_result, ensure_ascii=False)
 
 
-async def prompt_user(message: str) -> str:
+# Use Literal for the allowed prompt types
+async def prompt_user(prompt_type: Literal['yesNo', 'number', 'text', 'selection', 'routeChoice'], message: str, suggestions: list[str | dict[str, Any]] | None = None) -> str:
+# [bool, int, str, list[str | object]]:
     """Non-blocking placeholder for agent clarification prompts."""
-    print(f"Prompting user: {message}")
+    print(f"Prompting user {prompt_type}: {message},\n{suggestions}")
     return f"Question deferred to API workflow: {message}\nJust use the first object in the list of suggestions as the answer to the question."
 
 
@@ -247,24 +250,35 @@ Each Trip Locations object has a city, latitude and longitude of the central poi
 which the activities for each trip location should be contained. Next to that a catrgory variable is also used to filter for the correct activities. All objects,
 that fit in the criteria are automatically filtered in the search query to the data base, so you don't have to worry about that.
 
-Your job is now to chose the best locationsObjects that the query gave back. These should fit as best as you can to the notes provided. If no notes are provided
-then prompt the user, what his preferences are. For the category restaurant these can be certain food types like "pizza" or "fried rice". For shopping this can be
+Your job is now to chose the best locationsObjects (multiple) that the query gave back. These should fit as best as you can to the notes provided. If no notes are provided
+then prompt the user, using the prompt_user tool, what his preferences are. For the category restaurant these can be certain food types like "pizza" or "fried rice". For shopping this can be
 something like "shoes" or "sports gear" or "food". Be creative about your suggestions as the people will like creative and thoughtful suggestions.
+After you got the input you can now chose the best locationsObjects (multiple).
 IT IS VERY IMPORTANT THAT EVERY SUGGESTION ALSO EXISTS IN THE QUERY RESULT!!!!!!
 
-If their preferences are clear you can give them a selection of 3 to 6 items to choose from, that you think fits best to their trip. The people can then decide
-for one or more locations they want to visit. Also give them the option to search a specific name.
+You choose up to 6 items (more are better), that you think fits best to their trip. Use the prompt_user tool for that, with a list of osm_ids,
+to ask the people what locations they want to visit. DO THIS FOR EACH TRIP LOCATION! The people can then decide for one or more locations they want to visit.
+FOR EACH TRIP LOCATION ASK THE USER TO CHOOSE FROM THE LOCATIONS THAT ARE IN THE QUERY RESULT AND FIT BEST TO THEIR NOTES AND PREFERENCES.
 
 If the people choose more than one location put the locationsObject objects inside a list.
 
 All the information you get from the query about the locations should be used to fill the properties of the locationsObject, so that the people get a good overview
 about the location and can make a good decision.
 
-Repeat this for each Trip location object in the list and create list with all locationsObjects and lists of locationsObjects. It is important to follow
+Repeat this for each Trip location object in the list and create list with all locationsObjects and lists of locationsObjects.
+DO NOT FORGET TO ASK THE USER FOR HIS PREFERED LOCATIONS OF THE UP TO 6 YOU CHOSE AND DO THIS FOR EACH TRIP LOCATION OBJECT IN THE LIST.
 
 If you are unsure about something prompt the user with some suggestions.
 
 You are a good trip planer and you got this :)
+
+User prompts can be of the following types:
+- ('yesNo', message (e.g., "Do you want to visit this location?")) -> boolean.
+- ('number', message (e.g., "How many people are in your group?")) -> number.
+- ('text', message (e.g., "Please describe your preferences:")) -> string.
+- ('selection', message (e.g., "Please select an option:")) -> option id string, or an object if the backend explicitly defines a richer option payload.
+- ('routeChoice', message (e.g., "Please choose a route:")) -> selected route/option id string, or a route-choice object if specified in the question payload.
+
 """
     first_location = next(iter(inp.trip_locations), None)
     if first_location and first_location.heatmap_image_b64:
@@ -280,9 +294,12 @@ def _poi_query(
     radius_meters: int,
     category: str | None,
 ) -> tuple[str, dict[str, Any]]:
+    if category == "sightseeing":
+        category = ["tourism", "historic"]
+    else: category = [category]
     category_clause = (
         """
-        AND (primary_type = $category OR tags.category = $category)
+        AND (primary_type in $category OR tags.category in $category OR primary_family in $category)
         """
         if category
         else ""
