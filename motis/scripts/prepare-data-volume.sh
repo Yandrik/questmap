@@ -77,7 +77,10 @@ touch "$VALHALLA_PREPARED_MARKER"
 if [[ ! -f "$MOTIS_IMPORTED_MARKER" ]] || is_true "$FORCE_REFRESH"; then
   echo "Importing MOTIS data"
   rm -f "$MOTIS_IMPORTED_MARKER"
-  /motis import --data "$DATA_DIR" --config "$DATA_DIR/config.yml"
+  (
+    cd "$DATA_DIR"
+    /motis import --data "$DATA_DIR" --config "$DATA_DIR/config.yml"
+  )
   touch "$MOTIS_IMPORTED_MARKER"
 else
   echo "Keeping existing MOTIS import"
